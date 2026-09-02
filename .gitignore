@@ -1,0 +1,10 @@
+exports/
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+.env
+github_pusher.py
+probar_lazo.py
+*.log

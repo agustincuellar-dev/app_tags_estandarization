@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="37.00" TargetName="Transmisor_Analogo" TargetType="DataType" TargetClass="Standard" ContainsContext="true" ExportDate="Thu Jul 23 13:44:19 2026" ExportOptions="References NoRawData L5KData DecoratedData Context Dependencies ForceProtectedEncoding AllProjDocTrans">
+<Controller Use="Context" Name="INGENIO_LA_FLORIDA">
+<DataTypes Use="Context">
+<DataType Name="Transmisor_Analogo" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[UDT corporativa - Ingenio La Florida. Encapsula un instrumento analogico
+ISA-5.1 (transmisor de Presion/Temperatura/Nivel/Caudal/etc.). El tag base
+del controlador es el tag ISA funcional (ej. 300_PT_001); esta estructura
+agrupa sus miembros de software segun el Manual de Estandarizacion.
+NOTA: Tot/Tot_Prev solo son validos en instancias de Caudal (F) o
+Cantidad (Q); no deben usarse en instancias de Presion/Temperatura/Nivel.]]>
+</Description>
+<Members>
+<Member Name="Raw" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Valor crudo (4-20 mA / senal sin escalar) proveniente de la tarjeta de I/O.]]>
+</Description>
+</Member>
+<Member Name="PV" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Valor de proceso (Process Value) ya escalado a unidades de ingenieria.]]>
+</Description>
+</Member>
+<Member Name="Fault" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Falla del instrumento (senal fuera de rango, desconexion, etc.).]]>
+</Description>
+</Member>
+<Member Name="Sim_Cmd" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Comando: habilita el modo simulacion/forzado del instrumento.]]>
+</Description>
+</Member>
+<Member Name="Sim_PV" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Valor de proceso simulado, usado cuando Sim_Cmd esta activo.]]>
+</Description>
+</Member>
+<Member Name="Tot" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Acumulador/totalizador. Solo valido en instancias de Caudal (F) o Cantidad (Q).]]>
+</Description>
+</Member>
+<Member Name="Tot_Prev" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Acumulado del periodo anterior (ej. total del dia/turno previo).]]>
+</Description>
+</Member>
+<Member Name="Alm_HH" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Alarma de muy alto (High-High).]]>
+</Description>
+</Member>
+<Member Name="Alm_H" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Alarma de alto (High).]]>
+</Description>
+</Member>
+<Member Name="Alm_L" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Alarma de bajo (Low).]]>
+</Description>
+</Member>
+<Member Name="Alm_LL" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Alarma de muy bajo (Low-Low).]]>
+</Description>
+</Member>
+</Members>
+</DataType>
+<DataType Name="Motor_AC" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[UDT corporativa - Ingenio La Florida. Encapsula el control/estado de un
+motor de corriente alterna (arrancador directo, por variador o por
+arrancador suave), segun el Manual de Estandarizacion.]]>
+</Description>
+<Members>
+<Member Name="Cmd_Run" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Comando de arranque del motor.]]>
+</Description>
+</Member>
+<Member Name="Cmd_Stop" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Comando de parada del motor.]]>
+</Description>
+</Member>
+<Member Name="Sts_Running" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Estado real: motor en marcha (realimentacion de campo).]]>
+</Description>
+</Member>
+<Member Name="Flt_Overload" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Falla de sobrecarga termica del motor.]]>
+</Description>
+</Member>
+<Member Name="Mode_Auto" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Selector en modo Automatico (vs. Manual local).]]>
+</Description>
+</Member>
+<Member Name="Permissive" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Permisivo de arranque cumplido (enclavamientos de seguridad/proceso).]]>
+</Description>
+</Member>
+<Member Name="Speed_Ref" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Referencia de velocidad (para motores con variador).]]>
+</Description>
+</Member>
+<Member Name="Speed_Fbk" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Realimentacion de velocidad real (para motores con variador).]]>
+</Description>
+</Member>
+</Members>
+</DataType>
+<DataType Name="Valvula_Control" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[UDT corporativa - Ingenio La Florida. Encapsula el control/estado de una
+valvula de control o todo/nada (ISA-5.1: funcion V), segun el Manual de
+Estandarizacion.]]>
+</Description>
+<Members>
+<Member Name="Cmd_Pos" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Comando de posicion (0-100%) para valvulas de control modulantes.]]>
+</Description>
+</Member>
+<Member Name="Fbk_Pos" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Realimentacion de posicion real (0-100%).]]>
+</Description>
+</Member>
+<Member Name="Cmd_Open" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Comando de apertura, para valvulas todo/nada.]]>
+</Description>
+</Member>
+<Member Name="Cmd_Close" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Comando de cierre, para valvulas todo/nada.]]>
+</Description>
+</Member>
+<Member Name="Sts_Opened" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Estado real: valvula completamente abierta (final de carrera).]]>
+</Description>
+</Member>
+<Member Name="Sts_Closed" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Estado real: valvula completamente cerrada (final de carrera).]]>
+</Description>
+</Member>
+<Member Name="Flt_Transit" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Falla de transito: no alcanzo el final de carrera comandado en el tiempo esperado.]]>
+</Description>
+</Member>
+</Members>
+</DataType>
+</DataTypes>
+</Controller>
+</RSLogix5000Content>
