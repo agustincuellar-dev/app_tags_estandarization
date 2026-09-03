@@ -113,6 +113,11 @@ class TagGovernanceApp(tk.Tk):
 
         self.tag_propuesto = None
         self.numero_propuesto = None
+        # El número pertenece al lazo completo (Área + Variable), no a la
+        # función individual. El operador decide si abre un lazo nuevo o
+        # incorpora otro instrumento a uno ya existente.
+        self.modo_lazo = tk.StringVar(value="nuevo")
+        self.lazos_disponibles = {}
         # Si tiene valor, la app esta en MODO EDICION sobre ese tag (en
         # vez de proponiendo uno nuevo). Lo controla _entrar/_salir_modo_edicion.
         self.tag_en_edicion = None
@@ -336,12 +341,29 @@ class TagGovernanceApp(tk.Tk):
         self.cb_variable.bind("<<ComboboxSelected>>", self.verificar_y_consultar)
         self.cb_funcion.bind("<<ComboboxSelected>>", self.verificar_y_consultar)
 
+        ttk.Label(frame_sel, text="Asignación de lazo:").grid(row=3, column=0, sticky="w", **pad)
+        frame_lazo = ttk.Frame(frame_sel)
+        frame_lazo.grid(row=3, column=1, sticky="w", **pad)
+        ttk.Radiobutton(
+            frame_lazo, text="Nuevo lazo", variable=self.modo_lazo,
+            value="nuevo", command=self._on_modo_lazo_cambio,
+        ).pack(side="left")
+        ttk.Radiobutton(
+            frame_lazo, text="Lazo existente", variable=self.modo_lazo,
+            value="existente", command=self._on_modo_lazo_cambio,
+        ).pack(side="left", padx=(14, 0))
+
+        ttk.Label(frame_sel, text="Lazo existente:").grid(row=4, column=0, sticky="w", **pad)
+        self.cb_lazo = ttk.Combobox(frame_sel, state="disabled", width=45)
+        self.cb_lazo.grid(row=4, column=1, **pad)
+        self.cb_lazo.bind("<<ComboboxSelected>>", self.actualizar_propuesta)
+
         hint = ttk.Label(
             frame_sel,
-            text="Al completar los 3 campos, el sistema propone el tag automáticamente.",
+            text="Nuevo lazo propone el próximo número libre; un lazo existente reutiliza su número ISA.",
             foreground="#777", font=("Segoe UI", 8, "italic")
         )
-        hint.grid(row=3, column=0, columnspan=2, pady=(0, 6))
+        hint.grid(row=5, column=0, columnspan=2, pady=(0, 6))
 
         # ---------------- Paso 2: resultado ----------------
         frame_result = ttk.LabelFrame(self.contenedor, text="Paso 2 - Tags existentes en esta categoría")
@@ -657,6 +679,11 @@ class TagGovernanceApp(tk.Tk):
         self.cb_area.set("")
         self.cb_variable.set("")
         self.cb_funcion.set("")
+        self.modo_lazo.set("nuevo")
+        self.lazos_disponibles = {}
+        self.cb_lazo.set("")
+        self.cb_lazo["values"] = ()
+        self.cb_lazo.config(state="disabled")
         self.cb_usuario.set("")
         self.cb_estado.set("Planificado")
         self.cb_datatype.set("")
@@ -741,11 +768,33 @@ class TagGovernanceApp(tk.Tk):
     def _on_entry_tag_cambio(self, event=None):
         self._actualizar_traduccion()
 
+    def _on_modo_lazo_cambio(self):
+        """Activa el selector de lazos existentes cuando corresponde."""
+        estado = "readonly" if self.modo_lazo.get() == "existente" else "disabled"
+        self.cb_lazo.config(state=estado)
+        self.actualizar_propuesta()
+
+    def _cargar_lazos_disponibles(self, area_id, variable_id):
+        """Carga los lazos de Área + Variable para reutilizar su número."""
+        filas = db.listar_lazos(area_id, variable_id)
+        self.lazos_disponibles = {}
+        for fila in filas:
+            numero = fila["numero_loop"]
+            etiqueta = f"{numero:03d} — {fila['instrumentos']}"
+            self.lazos_disponibles[etiqueta] = numero
+        self.cb_lazo["values"] = list(self.lazos_disponibles)
+        if self.cb_lazo.get() not in self.lazos_disponibles:
+            self.cb_lazo.set("")
+
+    def _limpiar_propuesta_lazo(self, mensaje):
+        self.tag_propuesto = None
+        self.numero_propuesto = None
+        self._set_entry_tag("")
+        self.lbl_propuesta.config(text=mensaje, bg=AMBAR, fg=AZUL)
+        self._actualizar_traduccion()
+
     def actualizar_propuesta(self):
-        """SOLO LECTURA: consulta los tags existentes de la categoria
-        seleccionada y propone el siguiente correlativo libre. Nunca
-        escribe en la base de datos (eso es responsabilidad exclusiva
-        de on_guardar)."""
+        """SOLO LECTURA: arma un tag para un lazo nuevo o seleccionado."""
         area_sel = self.cb_area.get()
         var_sel = self.cb_variable.get()
         fun_sel = self.cb_funcion.get()
@@ -756,14 +805,21 @@ class TagGovernanceApp(tk.Tk):
         area = self.areas[area_sel]
         variable = self.variables[var_sel]
         funcion = self.funciones[fun_sel]
+        self._cargar_lazos_disponibles(area["id"], variable["id"])
 
         try:
-            tag_propuesto, numero = db.proponer_siguiente_tag(area["id"], variable["id"], funcion["id"])
+            if self.modo_lazo.get() == "existente":
+                numero = self.lazos_disponibles.get(self.cb_lazo.get())
+                if numero is None:
+                    self._limpiar_propuesta_lazo("Tag propuesto: seleccione un lazo existente")
+                    return
+            else:
+                numero = db.proponer_siguiente_numero_lazo(area["id"], variable["id"])
+            tag_propuesto = db.construir_tag(
+                area["id"], variable["id"], funcion["id"], numero
+            )
         except ValueError as e:
-            self.lbl_propuesta.config(text="Tag propuesto: —", bg=AMBAR, fg=AZUL)
-            self.tag_propuesto = None
-            self.numero_propuesto = None
-            self._set_entry_tag("")
+            self._limpiar_propuesta_lazo("Tag propuesto: —")
             messagebox.showerror("Rango agotado", str(e))
             return
 
@@ -774,12 +830,24 @@ class TagGovernanceApp(tk.Tk):
         self.status.config(text=f"Tag propuesto: '{tag_propuesto}' (todavía no guardado).")
         self._actualizar_traduccion()
 
-        self._refrescar_lista_existentes(area["id"], variable["id"], funcion["id"])
+        if self.modo_lazo.get() == "existente":
+            self._refrescar_lista_lazo(area["id"], variable["id"], numero)
+        else:
+            self._refrescar_lista_existentes(area["id"], variable["id"], funcion["id"])
 
     def _refrescar_lista_existentes(self, area_id, variable_id, funcion_id):
         """SOLO LECTURA: repuebla el Listbox con los tags ya existentes
         para la combinacion Area+Variable+Funcion dada."""
         existentes = db.obtener_tags_existentes(area_id, variable_id, funcion_id)
+        self.lista_existentes.delete(0, tk.END)
+        for t in existentes:
+            self.lista_existentes.insert(
+                tk.END, f"{t['tag_completo']}  —  {t['estado']}  —  {t['descripcion'] or ''}"
+            )
+
+    def _refrescar_lista_lazo(self, area_id, variable_id, numero_loop):
+        """Muestra todos los instrumentos que ya integran el lazo elegido."""
+        existentes = db.obtener_instrumentos_lazo(area_id, variable_id, numero_loop)
         self.lista_existentes.delete(0, tk.END)
         for t in existentes:
             self.lista_existentes.insert(
@@ -1105,7 +1173,7 @@ class TagGovernanceApp(tk.Tk):
         partes = tag_sugerido.strip().split("_")
         if len(partes) != 3:
             return
-        area_codigo, nucleo, _lazo = partes
+        area_codigo, nucleo, lazo = partes
         variable_letra, funcion_letra = nucleo[0], nucleo[1:]
 
         area_key = next((k for k in self.areas if k.startswith(area_codigo + " - ")), None)
@@ -1120,9 +1188,24 @@ class TagGovernanceApp(tk.Tk):
             self.cb_funcion.set(fun_key)
 
         if area_key is not None and var_key is not None and fun_key is not None:
+            # El asistente ISA propone completar un componente del MISMO
+            # lazo: selecciona su número en vez de confiar en una edición
+            # manual del texto del tag.
+            self.modo_lazo.set("existente")
+            self.cb_lazo.config(state="readonly")
             self.actualizar_propuesta()
-
-        self._set_entry_tag(tag_sugerido)
+            etiqueta = next(
+                (texto for texto, numero in self.lazos_disponibles.items()
+                 if numero == int(lazo)),
+                None,
+            )
+            if etiqueta is not None:
+                self.cb_lazo.set(etiqueta)
+                self.actualizar_propuesta()
+            else:
+                self._set_entry_tag(tag_sugerido)
+        else:
+            self._set_entry_tag(tag_sugerido)
         self._actualizar_traduccion()
         self.entry_tag.focus_set()
 
@@ -1301,12 +1384,16 @@ class TagGovernanceApp(tk.Tk):
 
         partes = lazo_id.strip().split("_")
         try:
-            numero = int(partes[-1])
-            area_codigo = partes[0] if len(partes) > 1 else None
+            if len(partes) != 3:
+                raise ValueError
+            area_codigo, variable_letra, numero_texto = partes
+            if not area_codigo or not variable_letra:
+                raise ValueError
+            numero = int(numero_texto)
         except ValueError:
             messagebox.showerror(
                 "Lazo inválido",
-                f"'{lazo_id}' no es un identificador de lazo válido (ej. '200_002').",
+                f"'{lazo_id}' no es un identificador de lazo válido (ej. '200_P_002').",
             )
             return
 
@@ -1319,11 +1406,16 @@ class TagGovernanceApp(tk.Tk):
             JOIN variables v ON t.variable_id = v.id
             JOIN funciones f ON t.funcion_id = f.id
             WHERE t.estado != 'Retirado' AND t.numero_loop = ?
+              AND a.codigo = ? AND t.variable_id = ?
         """
-        params = [numero]
-        if area_codigo is not None:
-            sql += " AND a.codigo = ?"
-            params.append(area_codigo)
+        variable = conn.execute(
+            "SELECT id FROM variables WHERE letra = ?", (variable_letra,)
+        ).fetchone()
+        if variable is None:
+            conn.close()
+            messagebox.showerror("Lazo inválido", f"Variable ISA desconocida: '{variable_letra}'.")
+            return
+        params = [numero, area_codigo, variable["id"]]
         sql += " ORDER BY t.tag_completo"
         filas = conn.execute(sql, params).fetchall()
         conn.close()

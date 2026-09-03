@@ -369,6 +369,108 @@ def proponer_siguiente_tag(area_id, variable_id, funcion_id):
 
 
 # ------------------------------------------------------------------
+# Lazos ISA: consulta y construcción de identidad
+# ------------------------------------------------------------------
+def listar_lazos(area_id, variable_id):
+    """Devuelve los lazos existentes de una Área + Variable.
+
+    Cada fila contiene ``numero_loop`` y un resumen de sus tags. Un lazo
+    agrupa instrumentos de funciones distintas que comparten el mismo
+    número ISA, por ejemplo PT/PC/PV con sufijo 001.
+    """
+    conn = get_connection()
+    try:
+        return conn.execute(
+            """
+            SELECT numero_loop, GROUP_CONCAT(tag_completo, ', ') AS instrumentos
+            FROM (
+                SELECT t.numero_loop, t.tag_completo
+                FROM tags t
+                WHERE t.area_id = ? AND t.variable_id = ?
+                ORDER BY t.numero_loop, t.tag_completo
+            )
+            GROUP BY numero_loop
+            ORDER BY numero_loop
+            """,
+            (area_id, variable_id),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def obtener_instrumentos_lazo(area_id, variable_id, numero_loop):
+    """Devuelve todos los instrumentos de un lazo ISA concreto.
+
+    La identidad del lazo es Área + Variable + Número. La función del
+    instrumento no participa del filtro porque precisamente es la parte
+    que puede variar entre los componentes del mismo lazo.
+    """
+    conn = get_connection()
+    try:
+        return conn.execute(
+            """
+            SELECT t.tag_completo, t.numero_loop, t.estado, t.descripcion,
+                   f.letra AS funcion_letra, f.nombre AS funcion_nombre
+            FROM tags t
+            JOIN funciones f ON f.id = t.funcion_id
+            WHERE t.area_id = ? AND t.variable_id = ? AND t.numero_loop = ?
+            ORDER BY t.tag_completo
+            """,
+            (area_id, variable_id, numero_loop),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def proponer_siguiente_numero_lazo(area_id, variable_id):
+    """Devuelve el primer número libre para crear un lazo nuevo.
+
+    Busca en todos los instrumentos de la misma Área + Variable, sin
+    separar por función: el número pertenece al lazo completo, no a PT,
+    PC, PV u otra función individual.
+    """
+    conn = get_connection()
+    try:
+        numeros = conn.execute(
+            """
+            SELECT DISTINCT numero_loop
+            FROM tags
+            WHERE area_id = ? AND variable_id = ?
+            ORDER BY numero_loop
+            """,
+            (area_id, variable_id),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    usados = {fila["numero_loop"] for fila in numeros}
+    siguiente_numero = 1
+    while siguiente_numero in usados:
+        siguiente_numero += 1
+    if siguiente_numero > 999:
+        raise ValueError("Se agotaron los 3 dígitos para este lazo (001-999).")
+    return siguiente_numero
+
+
+def construir_tag(area_id, variable_id, funcion_id, numero_loop):
+    """Construye un tag ISA validando sus catálogos y su número de lazo."""
+    if not isinstance(numero_loop, int) or isinstance(numero_loop, bool) or not 1 <= numero_loop <= 999:
+        raise ValueError("El número de lazo debe ser un entero entre 1 y 999.")
+
+    conn = get_connection()
+    try:
+        area = conn.execute("SELECT codigo FROM areas WHERE id = ?", (area_id,)).fetchone()
+        variable = conn.execute("SELECT letra FROM variables WHERE id = ?", (variable_id,)).fetchone()
+        funcion = conn.execute("SELECT letra FROM funciones WHERE id = ?", (funcion_id,)).fetchone()
+    finally:
+        conn.close()
+
+    if area is None or variable is None or funcion is None:
+        raise ValueError("Área, variable o función inválida para construir el tag.")
+    return f"{area['codigo']}_{variable['letra']}{funcion['letra']}_{numero_loop:03d}"
+
+
+# ------------------------------------------------------------------
 # Alta de un nuevo tag
 # ------------------------------------------------------------------
 def crear_tag(
