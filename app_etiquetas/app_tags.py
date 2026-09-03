@@ -19,9 +19,16 @@ from tkinter import ttk, messagebox, simpledialog
 import database as db
 from validador_isa import auditar_tag_recien_guardado
 
+try:
+    from PIL import Image, ImageTk
+    _PIL_OK = True
+except Exception:
+    _PIL_OK = False
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOGO_HEADER = os.path.join(BASE_DIR, "logo_header.png")
 LOGO_BALCANES = os.path.join(BASE_DIR, "logo_balcanes.png")
+LOGO_APP_ICO = os.path.join(BASE_DIR, "logo_app_tags.ico")
 ICONO_APP = os.path.join(BASE_DIR, "app_tags.ico")
 
 # Paleta corporativa tomada del logo de la aplicación
@@ -147,10 +154,13 @@ class TagGovernanceApp(tk.Tk):
 
     # ------------------------------------------------------------
     def _aplicar_identidad(self):
-        """Asigna el icono de la ventana. Si el .ico no está disponible
-        (o el sistema no lo soporta), la app arranca igual sin icono."""
+        """Asigna el icono de la ventana (nuevo logo 'T'). Si el .ico no
+        está disponible (o el sistema no lo soporta), la app arranca igual
+        sin icono."""
         try:
-            if os.path.isfile(ICONO_APP):
+            if os.path.isfile(LOGO_APP_ICO):
+                self.iconbitmap(LOGO_APP_ICO)
+            elif os.path.isfile(ICONO_APP):
                 self.iconbitmap(ICONO_APP)
         except tk.TclError:
             pass  # entorno sin soporte de iconbitmap: no es un error fatal
@@ -217,6 +227,23 @@ class TagGovernanceApp(tk.Tk):
         """Windows: event.delta llega en múltiplos de 120 por muesca."""
         self._canvas.yview_scroll(int(-event.delta / 120), "units")
 
+    def _agregar_logo_header(self, parent):
+        """Carga el logo (logo_app_tags.ico) en el encabezado usando PIL.
+        Se guarda la referencia en self.logo_img para evitar que el garbage
+        collector lo elimine. Si PIL o el archivo faltan, se omite."""
+        if not _PIL_OK or not os.path.isfile(LOGO_APP_ICO):
+            return
+        try:
+            pil = Image.open(LOGO_APP_ICO).resize(
+                (80, 80), Image.Resampling.LANCZOS
+            )
+            self.logo_img = ImageTk.PhotoImage(pil)
+            tk.Label(parent, image=self.logo_img, bg="white").pack(
+                side="left", padx=(0, 14)
+            )
+        except Exception:
+            self.logo_img = None
+
     def _construir_cabecera(self):
         """Banda superior, todo agrupado a la izquierda y en un solo
         renglón consecutivo: logo corporativo (Los Balcanes S.A., más
@@ -227,6 +254,8 @@ class TagGovernanceApp(tk.Tk):
 
         interior = tk.Frame(cabecera, bg="white")
         interior.pack(fill="x", pady=(10, 8), padx=16)
+
+        self._agregar_logo_header(interior)
 
         bloque_izq = tk.Frame(interior, bg="white")
         bloque_izq.pack(side="left")

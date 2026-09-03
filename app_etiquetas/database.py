@@ -10,10 +10,35 @@ una app web (Flask), reutilizar este archivo sin cambios.
 
 import sqlite3
 import os
+import sys
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "tags_ingenio.db")
+
+
+def _resolver_db_path():
+    """Ruta de la base de datos, persistente entre ejecuciones.
+
+    En el .exe compilado con PyInstaller database.py vive en una carpeta
+    temporal; se busca/crea tags_ingenio.db junto al .exe y, si no existe
+    (primer arranque), se copia allí la base incluida para que los guardados
+    persistan. En código fuente se usa la base junto a database.py."""
+    if getattr(sys, "frozen", False):
+        carpeta_exe = os.path.dirname(sys.executable)
+        db_persistente = os.path.join(carpeta_exe, "tags_ingenio.db")
+        if not os.path.isfile(db_persistente):
+            try:
+                bundled = os.path.join(BASE_DIR, "tags_ingenio.db")
+                if os.path.isfile(bundled):
+                    import shutil
+                    shutil.copyfile(bundled, db_persistente)
+            except OSError:
+                pass
+        return db_persistente
+    return os.path.join(BASE_DIR, "tags_ingenio.db")
+
+
+DB_PATH = _resolver_db_path()
 SCHEMA_PATH = os.path.join(BASE_DIR, "schema.sql")
 
 
