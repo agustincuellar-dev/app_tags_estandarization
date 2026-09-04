@@ -673,6 +673,7 @@ class TagGovernanceApp(tb.Window):
         acciones = ttk.Frame(izquierda)
         acciones.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         ttk.Button(acciones, text="Eliminar tag seleccionado", command=self.on_eliminar, style="danger.Outline.TButton").pack(side="left")
+        ttk.Button(acciones, text="🔄 Limpiar", command=self.limpiar_formulario, style="secondary.TButton").pack(side="right", padx=(0, 8))
         self.btn_siguiente = ttk.Button(acciones, text="SIGUIENTE →", command=self.ir_a_datos, style="success.TButton", state="disabled")
         self.btn_siguiente.pack(side="right")
 
@@ -718,6 +719,36 @@ class TagGovernanceApp(tb.Window):
         self.btn_editar_detalle = ttk.Button(detalle, text="Editar", command=self.editar_tag_detallado, style="primary.TButton", state="disabled")
         self.btn_editar_detalle.grid(row=len(etiquetas) + 3, column=1, sticky="e", pady=(10, 0))
         ttk.Button(derecha, text="EXPANDIR BÚSQUEDA", command=lambda: self.mostrar_vista("busqueda"), style="info.TButton").grid(row=5, column=0, sticky="ew", pady=(12, 0))
+
+    def limpiar_formulario(self):
+        """Resetea el Paso 1, su propuesta y el detalle de tags recientes."""
+        self.cb_area.set("")
+        self.cb_variable.set("")
+        self.cb_funcion.set("")
+        self.modo_lazo.set("nuevo")
+        self.lazos_disponibles = {}
+        self.cb_lazo.set("")
+        self.cb_lazo["values"] = ()
+        self.cb_lazo.config(state="disabled")
+        self.tag_propuesto = None
+        self.numero_propuesto = None
+        self._set_entry_tag("")
+        self.lbl_propuesta.config(text="Tag propuesto: —", style="warning.TLabel")
+        self.lista_existentes.delete(0, tk.END)
+        self.lbl_traduccion.config(text="")
+        self.btn_siguiente.config(state="disabled")
+        self.tree_recientes.selection_remove(self.tree_recientes.selection())
+        for item in self.tree_recientes.get_children():
+            self.tree_recientes.item(item, tags=())
+        self.tag_seleccionado_actual = None
+        self.tag_detallado = None
+        for variable in self.detalle_vars.values():
+            variable.set("—")
+        self.lbl_lectura_reciente.config(text="Lectura ISA-5.1: —")
+        self.detalle_placeholder.grid()
+        self.btn_editar_detalle.config(state="disabled")
+        self.btn_exportar_recientes.config(state="disabled")
+        self.status.config(text="Formulario de creación reiniciado.")
 
     def _construir_pantalla_datos(self):
         vista = self.vista_datos
