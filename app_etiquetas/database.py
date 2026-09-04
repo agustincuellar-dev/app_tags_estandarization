@@ -162,6 +162,7 @@ def _cargar_funciones_isa_estandar(conn):
         ("G",   "Visor Local / Indicador de Vidrio"),     # Tabla 1 fila G; usado en PG/TG/LG
         ("K",   "Estación de Control"),                   # Tabla 1 fila K, col 4
         ("U",   "Multifunción"),                          # Tabla 1 fila U, col 3/4
+        ("XV",  "Válvula Todo/Nada / On-Off"),
     ]
     conn.executemany(
         "INSERT OR IGNORE INTO funciones (letra, nombre) VALUES (?,?)",

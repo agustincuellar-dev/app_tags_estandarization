@@ -638,6 +638,7 @@ class TagGovernanceApp(tb.Window):
         ttk.Label(izquierda, text="Función del instrumento:").grid(row=2, column=0, sticky="w", pady=5)
         self.cb_funcion = ttk.Combobox(izquierda, values=list(self.funciones), state="readonly")
         self.cb_funcion.grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=5)
+        ttk.Button(izquierda, text="💡 Asistente ISA", command=self.abrir_asistente_isa, style="info.Outline.TButton").grid(row=2, column=2, padx=(8, 0), pady=5)
         for cb in (self.cb_area, self.cb_variable, self.cb_funcion):
             self._redirigir_scroll_combobox(cb)
             cb.bind("<<ComboboxSelected>>", self.verificar_y_consultar)
@@ -757,6 +758,44 @@ class TagGovernanceApp(tb.Window):
         for col,title,width in (("tag","Tag",150),("estado","Estado",110),("tipo_senal","Tipo de Señal",110),("io","Entrada/Salida",120),("fluido","Fluido/Product",130),("fecha","Fecha/Hora creación",150),("descripcion","Descripción/Alias",350)):
             self.tree_tags.heading(col,text=title); self.tree_tags.column(col,width=width,anchor="w")
         self.tree_tags.grid(row=1,column=0,columnspan=2,sticky="nsew"); self.tree_tags.bind("<Double-1>", self._on_grilla_doble_click); self.tree_tags.tag_configure("retirado", foreground=ROJO_PELIGRO)
+
+    def abrir_asistente_isa(self):
+        """Asistente de decisiones para elegir la función ISA del instrumento."""
+        if getattr(self, "ventana_asistente_isa", None) and self.ventana_asistente_isa.winfo_exists():
+            self.ventana_asistente_isa.lift()
+            return
+        ventana = tk.Toplevel(self)
+        ventana.title("💡 Asistente ISA")
+        ventana.geometry("500x300")
+        ventana.transient(self)
+        ventana.grab_set()
+        self.ventana_asistente_isa = ventana
+        self.asistente_isa_cuerpo = ttk.Frame(ventana, padding=20)
+        self.asistente_isa_cuerpo.pack(fill="both", expand=True)
+        self._pregunta_asistente_isa(
+            "¿Qué tipo de instrumento necesita identificar?",
+            (("Sensor", lambda: self._pregunta_asistente_isa("¿El sensor es analógico o digital/de corte?", (("Analógico", lambda: self._pregunta_asistente_isa("¿Tiene indicación o pantalla local?", (("Sí", lambda: self.seleccionar_funcion_isa("IT")), ("No", lambda: self.seleccionar_funcion_isa("T"))))), ("Digital / corte", lambda: self.seleccionar_funcion_isa("S"))))),
+             ("Válvula", lambda: self._pregunta_asistente_isa("¿Cómo opera la válvula?", (("Modulante", lambda: self.seleccionar_funcion_isa("V")), ("Todo/Nada", lambda: self.seleccionar_funcion_isa("XV"))))),
+             ("Controlador", lambda: self.seleccionar_funcion_isa("C"))),
+        )
+
+    def _pregunta_asistente_isa(self, pregunta, opciones):
+        for hijo in self.asistente_isa_cuerpo.winfo_children():
+            hijo.destroy()
+        ttk.Label(self.asistente_isa_cuerpo, text=pregunta, font=("Segoe UI", 14, "bold"), wraplength=440).pack(pady=(10, 20))
+        for texto, accion in opciones:
+            ttk.Button(self.asistente_isa_cuerpo, text=texto, command=accion, style="primary.TButton", width=28).pack(pady=5)
+        ttk.Button(self.asistente_isa_cuerpo, text="Cancelar", command=self.ventana_asistente_isa.destroy, style="secondary.Outline.TButton").pack(pady=(14, 0))
+
+    def seleccionar_funcion_isa(self, codigo):
+        clave = next((texto for texto in self.funciones if texto.startswith(codigo + " - ")), None)
+        if clave is None:
+            messagebox.showwarning("Función no disponible", f"La función ISA '{codigo}' no está disponible en el catálogo.", parent=self.ventana_asistente_isa)
+            return
+        self.cb_funcion.set(clave)
+        self.ventana_asistente_isa.destroy()
+        self.verificar_y_consultar()
+        self.status.config(text=f"Asistente ISA: función '{codigo}' seleccionada.")
 
     def ir_a_datos(self):
         if not self.tag_propuesto:
