@@ -106,6 +106,9 @@ class TagGovernanceApp(tb.Window):
         self.state("zoomed")
         self.resizable(True, True)
         self.minsize(1200, 768)
+        self.app_style = tb.Style()
+        self.app_style.configure("RecentExport.TButton", background="#1D6F42", foreground="white")
+        self.app_style.map("RecentExport.TButton", background=[("active", "#155634")])
         self._aplicar_identidad()
 
         db.init_db()
@@ -681,26 +684,34 @@ class TagGovernanceApp(tb.Window):
         self.entry_busqueda_rapida = ttk.Entry(barra)
         self.entry_busqueda_rapida.pack(side="left", fill="x", expand=True)
         self.entry_busqueda_rapida.bind("<Return>", lambda _e: self.abrir_busqueda_rapida())
+        self.entry_busqueda_rapida.bind("<KeyRelease>", self.filtrar_tags_recientes)
         ttk.Button(barra, text="Buscar", command=self.abrir_busqueda_rapida, style="primary.TButton").pack(side="left", padx=(6, 0))
-        self.tree_recientes = ttk.Treeview(derecha, columns=("tag", "estado", "fecha"), show="headings", height=8)
+        self.tree_recientes = ttk.Treeview(derecha, columns=("tag", "estado", "fecha"), show="headings", height=8, selectmode="extended")
         for col, title, width in (("tag", "Tag", 230), ("estado", "Estado", 115), ("fecha", "Creado", 145)):
             self.tree_recientes.heading(col, text=title); self.tree_recientes.column(col, width=width, anchor="w")
         self.tree_recientes.grid(row=2, column=0, sticky="nsew")
+        self.tree_recientes.tag_configure("selected", background="#1f538d", foreground="white")
         self.tree_recientes.bind("<<TreeviewSelect>>", self._detalle_reciente)
+        self.tree_recientes.bind("<Shift-Down>", lambda _e: self._extender_seleccion_recientes("down"))
+        self.tree_recientes.bind("<Shift-Up>", lambda _e: self._extender_seleccion_recientes("up"))
+        self.btn_exportar_recientes = ttk.Button(barra, text="Exportar Excel", command=self.exportar_seleccionados_recientes, style="RecentExport.TButton", state="disabled")
+        self.btn_exportar_recientes.pack(side="left", padx=(6, 0))
         ttk.Separator(derecha, orient="horizontal").grid(row=3, column=0, sticky="ew", pady=14)
         detalle = ttk.Frame(derecha)
         detalle.grid(row=4, column=0, sticky="nsew")
         detalle.columnconfigure(1, weight=1)
         ttk.Label(detalle, text="Detalle del tag seleccionado", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        self.lbl_lectura_reciente = ttk.Label(detalle, text="Lectura ISA-5.1: —", style="info.TLabel", wraplength=450)
+        self.lbl_lectura_reciente.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
         self.detalle_placeholder = ttk.Label(detalle, text="Seleccione un tag de la lista para ver su detalle", style="secondary.TLabel", wraplength=450)
-        self.detalle_placeholder.grid(row=1, column=0, columnspan=2, sticky="w", pady=8)
+        self.detalle_placeholder.grid(row=2, column=0, columnspan=2, sticky="w", pady=8)
         self.detalle_vars = {clave: tk.StringVar(value="—") for clave in ("tag_completo", "descripcion", "estado", "ubicacion", "fabricante", "modelo", "rango_medicion", "unidad", "tipo_senal", "entrada_salida", "fluido_proceso", "creado_por", "fecha_creacion")}
         etiquetas = (("tag_completo", "Tag"), ("descripcion", "Descripción"), ("estado", "Estado"), ("ubicacion", "Ubicación física"), ("fabricante", "Fabricante"), ("modelo", "Modelo"), ("rango_medicion", "Rango"), ("unidad", "Unidad"), ("tipo_senal", "Tipo de Señal"), ("entrada_salida", "Entrada/Salida"), ("fluido_proceso", "Fluido/Product"), ("creado_por", "Registrado por"), ("fecha_creacion", "Fecha de creación"))
-        for fila, (clave, titulo) in enumerate(etiquetas, start=2):
+        for fila, (clave, titulo) in enumerate(etiquetas, start=3):
             ttk.Label(detalle, text=f"{titulo}:", style="secondary.TLabel").grid(row=fila, column=0, sticky="nw", padx=(0, 8), pady=1)
             ttk.Label(detalle, textvariable=self.detalle_vars[clave], wraplength=360).grid(row=fila, column=1, sticky="nw", pady=1)
         self.btn_editar_detalle = ttk.Button(detalle, text="Editar", command=self.editar_tag_detallado, style="primary.TButton", state="disabled")
-        self.btn_editar_detalle.grid(row=len(etiquetas) + 2, column=1, sticky="e", pady=(10, 0))
+        self.btn_editar_detalle.grid(row=len(etiquetas) + 3, column=1, sticky="e", pady=(10, 0))
         ttk.Button(derecha, text="EXPANDIR BÚSQUEDA", command=lambda: self.mostrar_vista("busqueda"), style="info.TButton").grid(row=5, column=0, sticky="ew", pady=(12, 0))
 
     def _construir_pantalla_datos(self):
@@ -753,18 +764,59 @@ class TagGovernanceApp(tb.Window):
         self.lbl_tag_datos.config(text=f"Tag propuesto: {self.tag_propuesto}")
         self.mostrar_vista("datos")
 
-    def refrescar_tags_recientes(self):
-        if not hasattr(self, "tree_recientes"): return
+    def _obtener_tags_recientes(self, texto=""):
+        """Consulta toda la base y devuelve hasta diez coincidencias recientes."""
+        conn = db.get_connection()
+        try:
+            patron = f"%{texto.strip()}%"
+            return conn.execute(
+                """
+                SELECT tag_completo, estado, fecha_creacion
+                FROM tags
+                WHERE tag_completo LIKE ? OR descripcion LIKE ? OR estado LIKE ?
+                   OR comentarios LIKE ? OR fluido_proceso LIKE ?
+                ORDER BY fecha_creacion DESC
+                LIMIT 10
+                """,
+                (patron, patron, patron, patron, patron),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    def refrescar_tags_recientes(self, texto=""):
+        if not hasattr(self, "tree_recientes"):
+            return
         self.tree_recientes.delete(*self.tree_recientes.get_children())
-        for fila in db.buscar_tags("")[:10]:
+        filas = self._obtener_tags_recientes(texto)
+        for fila in filas:
             self.tree_recientes.insert("", tk.END, iid=fila["tag_completo"], values=(fila["tag_completo"], fila["estado"], fila["fecha_creacion"] or ""))
+        if not filas and texto.strip():
+            self.tree_recientes.insert("", tk.END, values=("No se encontraron tags que coincidan con la búsqueda", "", ""))
+        self.btn_exportar_recientes.config(state="disabled")
+
+    def filtrar_tags_recientes(self, _event=None):
+        self.refrescar_tags_recientes(self.entry_busqueda_rapida.get())
 
     def abrir_busqueda_rapida(self):
         texto = self.entry_busqueda_rapida.get().strip(); self.mostrar_vista("busqueda"); self.entry_buscar.delete(0,tk.END); self.entry_buscar.insert(0,text); self._refrescar_grilla_general(texto)
 
     def _detalle_reciente(self, _event=None):
-        seleccion=self.tree_recientes.selection()
-        if seleccion: self.mostrar_detalle_tag(seleccion[0])
+        seleccion = self.tree_recientes.selection()
+        for item in self.tree_recientes.get_children():
+            self.tree_recientes.item(item, tags=("selected",) if item in seleccion else ())
+        self.btn_exportar_recientes.config(state="normal" if seleccion else "disabled")
+        if seleccion:
+            self.tag_seleccionado_actual = self.tree_recientes.focus() or seleccion[-1]
+            self.mostrar_detalle_tag(self.tag_seleccionado_actual)
+
+    def exportar_seleccionados_recientes(self):
+        tags = self.tree_recientes.selection()
+        if not tags:
+            messagebox.showwarning("Exportación", "Seleccione al menos un tag para exportar.")
+            return
+        self.refrescar_paso5()
+        self.tree_tags.selection_set(tags)
+        self.on_exportar_excel()
 
     def mostrar_detalle_tag(self, tag_codigo):
         """Actualiza el detalle integrado del Inicio; nunca abre una ventana."""
@@ -772,6 +824,9 @@ class TagGovernanceApp(tb.Window):
         if fila is None:
             return
         self.tag_detallado = fila
+        self.lbl_lectura_reciente.config(
+            text="Lectura ISA-5.1: " + traducir_tag_humano(tag_codigo, DICCIONARIOS)
+        )
         for clave, variable in self.detalle_vars.items():
             variable.set(fila[clave] or "—")
         self.detalle_placeholder.grid_remove()
@@ -1497,7 +1552,27 @@ class TagGovernanceApp(tb.Window):
             ws.append(valores)
         wb.save(ruta)
 
-        messagebox.showinfo("Exportación completada", f"{len(filas)} tags exportados")
+        messagebox.showinfo("Exportación completada", f"{len(filas)} tags exportados correctamente")
+
+    def _extender_seleccion_recientes(self, direccion):
+        """Extiende con Shift+Flecha la selección de tags recientes."""
+        tv = self.tree_recientes
+        items = tv.get_children()
+        seleccion = list(tv.selection())
+        if not items or not seleccion:
+            return "break"
+        base = tv.focus() if tv.focus() in items else seleccion[-1]
+        indice = items.index(base)
+        nuevo_indice = indice + (1 if direccion == "down" else -1)
+        if not 0 <= nuevo_indice < len(items):
+            return "break"
+        inicio = items.index(seleccion[0])
+        desde, hasta = sorted((inicio, nuevo_indice))
+        tv.selection_set(items[desde:hasta + 1])
+        tv.focus(items[nuevo_indice])
+        tv.see(items[nuevo_indice])
+        self._detalle_reciente()
+        return "break"
 
     def _extender_seleccion(self, direccion):
         """Extiende la selección de la grilla (Shift-Up / Shift-Down)."""
