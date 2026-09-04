@@ -615,11 +615,15 @@ class TagGovernanceApp(tb.Window):
         vista = self.vista_inicio
         vista.columnconfigure(0, weight=3)
         vista.columnconfigure(1, weight=2)
-        vista.rowconfigure(0, weight=1)
+        vista.rowconfigure(1, weight=1)
+        encabezado = ttk.Frame(vista, padding=(8, 4, 8, 16))
+        encabezado.grid(row=0, column=0, columnspan=2, sticky="ew")
+        ttk.Label(encabezado, text="Registro de Nuevo Instrumento", font=("Segoe UI", 20, "bold")).pack(anchor="center")
+        ttk.Label(encabezado, text="Ingenio La Florida - Gestión de Tags ISA-5.1", style="secondary.TLabel", font=("Segoe UI", 10)).pack(anchor="center", pady=(3, 0))
         izquierda = ttk.Labelframe(vista, text="Crear Nuevo Tag", padding=14)
         derecha = ttk.Labelframe(vista, text="Búsqueda Rápida", padding=14)
-        izquierda.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        derecha.grid(row=0, column=1, sticky="nsew")
+        izquierda.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+        derecha.grid(row=1, column=1, sticky="nsew")
         izquierda.columnconfigure(1, weight=1)
 
         ttk.Label(izquierda, text="Área de la planta:").grid(row=0, column=0, sticky="w", pady=5)
@@ -667,7 +671,10 @@ class TagGovernanceApp(tb.Window):
         self.btn_siguiente = ttk.Button(acciones, text="SIGUIENTE →", command=self.ir_a_datos, style="success.TButton", state="disabled")
         self.btn_siguiente.pack(side="right")
 
-        derecha.rowconfigure(2, weight=1)
+        # Panel derecho: lista superior (40%) y detalle integrado inferior (60%).
+        derecha.columnconfigure(0, weight=1)
+        derecha.rowconfigure(2, weight=2)
+        derecha.rowconfigure(4, weight=3)
         ttk.Label(derecha, text="Tags recientes", font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w")
         barra = ttk.Frame(derecha)
         barra.grid(row=1, column=0, sticky="ew", pady=8)
@@ -675,12 +682,26 @@ class TagGovernanceApp(tb.Window):
         self.entry_busqueda_rapida.pack(side="left", fill="x", expand=True)
         self.entry_busqueda_rapida.bind("<Return>", lambda _e: self.abrir_busqueda_rapida())
         ttk.Button(barra, text="Buscar", command=self.abrir_busqueda_rapida, style="primary.TButton").pack(side="left", padx=(6, 0))
-        self.tree_recientes = ttk.Treeview(derecha, columns=("tag", "estado", "fecha"), show="headings", height=16)
-        for col, title, width in (("tag", "Tag", 170), ("estado", "Estado", 110), ("fecha", "Creado", 145)):
+        self.tree_recientes = ttk.Treeview(derecha, columns=("tag", "estado", "fecha"), show="headings", height=8)
+        for col, title, width in (("tag", "Tag", 230), ("estado", "Estado", 115), ("fecha", "Creado", 145)):
             self.tree_recientes.heading(col, text=title); self.tree_recientes.column(col, width=width, anchor="w")
         self.tree_recientes.grid(row=2, column=0, sticky="nsew")
         self.tree_recientes.bind("<<TreeviewSelect>>", self._detalle_reciente)
-        ttk.Button(derecha, text="EXPANDIR BÚSQUEDA", command=lambda: self.mostrar_vista("busqueda"), style="info.TButton").grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        ttk.Separator(derecha, orient="horizontal").grid(row=3, column=0, sticky="ew", pady=14)
+        detalle = ttk.Frame(derecha)
+        detalle.grid(row=4, column=0, sticky="nsew")
+        detalle.columnconfigure(1, weight=1)
+        ttk.Label(detalle, text="Detalle del tag seleccionado", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        self.detalle_placeholder = ttk.Label(detalle, text="Seleccione un tag de la lista para ver su detalle", style="secondary.TLabel", wraplength=450)
+        self.detalle_placeholder.grid(row=1, column=0, columnspan=2, sticky="w", pady=8)
+        self.detalle_vars = {clave: tk.StringVar(value="—") for clave in ("tag_completo", "descripcion", "estado", "ubicacion", "fabricante", "modelo", "rango_medicion", "unidad", "tipo_senal", "entrada_salida", "fluido_proceso", "creado_por", "fecha_creacion")}
+        etiquetas = (("tag_completo", "Tag"), ("descripcion", "Descripción"), ("estado", "Estado"), ("ubicacion", "Ubicación física"), ("fabricante", "Fabricante"), ("modelo", "Modelo"), ("rango_medicion", "Rango"), ("unidad", "Unidad"), ("tipo_senal", "Tipo de Señal"), ("entrada_salida", "Entrada/Salida"), ("fluido_proceso", "Fluido/Product"), ("creado_por", "Registrado por"), ("fecha_creacion", "Fecha de creación"))
+        for fila, (clave, titulo) in enumerate(etiquetas, start=2):
+            ttk.Label(detalle, text=f"{titulo}:", style="secondary.TLabel").grid(row=fila, column=0, sticky="nw", padx=(0, 8), pady=1)
+            ttk.Label(detalle, textvariable=self.detalle_vars[clave], wraplength=360).grid(row=fila, column=1, sticky="nw", pady=1)
+        self.btn_editar_detalle = ttk.Button(detalle, text="Editar", command=self.editar_tag_detallado, style="primary.TButton", state="disabled")
+        self.btn_editar_detalle.grid(row=len(etiquetas) + 2, column=1, sticky="e", pady=(10, 0))
+        ttk.Button(derecha, text="EXPANDIR BÚSQUEDA", command=lambda: self.mostrar_vista("busqueda"), style="info.TButton").grid(row=5, column=0, sticky="ew", pady=(12, 0))
 
     def _construir_pantalla_datos(self):
         vista = self.vista_datos
@@ -746,16 +767,19 @@ class TagGovernanceApp(tb.Window):
         if seleccion: self.mostrar_detalle_tag(seleccion[0])
 
     def mostrar_detalle_tag(self, tag_codigo):
-        fila=db.obtener_tag_completo(tag_codigo)
-        if fila is None: return
-        ventana=tk.Toplevel(self); ventana.title(f"Detalle — {tag_codigo}"); ventana.geometry("620x520")
-        cuerpo=ttk.Frame(ventana,padding=18); cuerpo.pack(fill="both",expand=True)
-        ttk.Label(cuerpo,text=tag_codigo,font=("Segoe UI",18,"bold"),style="warning.TLabel").pack(anchor="w",pady=(0,12))
-        for clave,titulo in (("descripcion","Descripción"),("estado","Estado"),("ubicacion","Ubicación"),("fabricante","Fabricante"),("modelo","Modelo"),("rango_medicion","Rango"),("unidad","Unidad"),("tipo_senal","Tipo de Señal"),("entrada_salida","Entrada/Salida"),("fluido_proceso","Fluido/Producto"),("creado_por","Registrado por"),("fecha_creacion","Creado")):
-            ttk.Label(cuerpo,text=f"{titulo}: {fila[clave] or '—'}").pack(anchor="w",pady=2)
-        acciones=ttk.Frame(cuerpo); acciones.pack(fill="x",pady=16)
-        ttk.Button(acciones,text="Editar",command=lambda:(ventana.destroy(),self._abrir_edicion(fila)),style="primary.TButton").pack(side="left")
-        ttk.Button(acciones,text="Cerrar",command=ventana.destroy).pack(side="right")
+        """Actualiza el detalle integrado del Inicio; nunca abre una ventana."""
+        fila = db.obtener_tag_completo(tag_codigo)
+        if fila is None:
+            return
+        self.tag_detallado = fila
+        for clave, variable in self.detalle_vars.items():
+            variable.set(fila[clave] or "—")
+        self.detalle_placeholder.grid_remove()
+        self.btn_editar_detalle.config(state="normal")
+
+    def editar_tag_detallado(self):
+        if getattr(self, "tag_detallado", None) is not None:
+            self._abrir_edicion(self.tag_detallado)
 
     def _abrir_edicion(self, fila):
         self._entrar_modo_edicion(fila); self.lbl_tag_datos.config(text=f"Editando: {fila['tag_completo']}"); self.mostrar_vista("datos")
