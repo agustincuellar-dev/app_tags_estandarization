@@ -109,6 +109,7 @@ class TagGovernanceApp(tb.Window):
         self.app_style = tb.Style()
         self.app_style.configure("RecentExport.TButton", background="#1D6F42", foreground="white")
         self.app_style.map("RecentExport.TButton", background=[("active", "#155634")])
+        self.app_style.configure("IsaReading.TLabel", background="#1D6F42", foreground="white")
         self._aplicar_identidad()
 
         db.init_db()
@@ -702,7 +703,10 @@ class TagGovernanceApp(tb.Window):
         detalle.grid(row=4, column=0, sticky="nsew")
         detalle.columnconfigure(1, weight=1)
         ttk.Label(detalle, text="Detalle del tag seleccionado", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
-        self.lbl_lectura_reciente = ttk.Label(detalle, text="Lectura ISA-5.1: —", style="info.TLabel", wraplength=450)
+        self.lbl_lectura_reciente = ttk.Label(
+            detalle, text="Lectura ISA-5.1: —", style="IsaReading.TLabel",
+            font=("Segoe UI", 16, "bold"), padding=(14, 12), wraplength=450,
+        )
         self.lbl_lectura_reciente.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
         self.detalle_placeholder = ttk.Label(detalle, text="Seleccione un tag de la lista para ver su detalle", style="secondary.TLabel", wraplength=450)
         self.detalle_placeholder.grid(row=2, column=0, columnspan=2, sticky="w", pady=8)
