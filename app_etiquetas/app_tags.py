@@ -15,6 +15,8 @@ Ejecutar con:  python app_tags.py
 import os
 import time
 import tkinter as tk
+import ttkbootstrap as tb
+from ttkbootstrap.constants import *
 from tkinter import ttk, messagebox, simpledialog
 import database as db
 from validador_isa import auditar_tag_recien_guardado
@@ -94,10 +96,13 @@ def generar_tag_plc(tag_oficial):
     return tag_oficial
 
 
-class TagGovernanceApp(tk.Tk):
+class TagGovernanceApp(tb.Window):
     def __init__(self):
-        super().__init__()
-        self.title("Tags App - Gestión de Tags ISA-5.1")
+        super().__init__(
+            title="Tags App - Gestión de Tags ISA-5.1",
+            themename="darkly",
+            size=(1200, 800),
+        )
         self.state("zoomed")
         self.resizable(True, True)
         self.minsize(1200, 768)
@@ -130,19 +135,21 @@ class TagGovernanceApp(tk.Tk):
         self.header_frame.pack(side="top", fill="x")
 
         self._canvas = tk.Canvas(self, bg=self["bg"], highlightthickness=0)
-        self._scrollbar = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
-        self._canvas.configure(yscrollcommand=self._scrollbar.set)
+        self.canvas = self._canvas
+        self._scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self._scrollbar.set)
         self._scrollbar.pack(side="right", fill="y")
-        self._canvas.pack(side="top", fill="both", expand=True)
+        self.canvas.pack(side="top", fill="both", expand=True)
 
-        self.contenedor = tk.Frame(self._canvas, bg=self["bg"])
-        self._ventana_canvas = self._canvas.create_window(
+        self.contenedor = tk.Frame(self.canvas, bg=self["bg"])
+        self._ventana_canvas = self.canvas.create_window(
             (0, 0), window=self.contenedor, anchor="nw"
         )
         self.contenedor.bind("<Configure>", self._on_contenedor_configure)
-        self._canvas.bind("<Configure>", self._on_canvas_configure)
-        self._canvas.bind("<MouseWheel>", self._on_rueda)
-        self.contenedor.bind("<MouseWheel>", self._on_rueda)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.bind_all("<Button-4>", self._on_mousewheel)
+        self.bind_all("<Button-5>", self._on_mousewheel)
 
         self._build_ui()
 
@@ -228,9 +235,28 @@ class TagGovernanceApp(tk.Tk):
             hijo.bind("<MouseWheel>", self._on_rueda)
             self._vincular_rueda(hijo)
 
+    def _on_mousewheel(self, event):
+        """Desplaza el Canvas principal con la rueda del mouse."""
+        if hasattr(self, "canvas"):
+            if getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
+                direction = 1
+            else:
+                direction = -1
+            self.canvas.yview_scroll(direction, "units")
+
+    def _redirigir_scroll_combobox(self, combobox):
+        """Evita que un Combobox cambie su valor con la rueda y desplaza la página."""
+        combobox.bind("<MouseWheel>", self._on_mousewheel_combobox)
+        combobox.bind("<Button-4>", self._on_mousewheel_combobox)
+        combobox.bind("<Button-5>", self._on_mousewheel_combobox)
+
+    def _on_mousewheel_combobox(self, event):
+        self._on_mousewheel(event)
+        return "break"
+
     def _on_rueda(self, event):
-        """Windows: event.delta llega en múltiplos de 120 por muesca."""
-        self._canvas.yview_scroll(int(-event.delta / 120), "units")
+        """Compatibilidad con los bindings existentes del scroll de página."""
+        self._on_mousewheel(event)
 
     def _agregar_logo_header(self, parent):
         """Carga el logo (logo_app_tags.ico) en el encabezado usando PIL.
@@ -299,6 +325,15 @@ class TagGovernanceApp(tk.Tk):
         tk.Frame(cabecera, bg=AMBAR, height=3).pack(fill="x", side="bottom")
 
     def _build_ui(self):
+        """Fase 3: tres vistas persistentes; solo una se muestra a la vez.
+
+        Pantalla A reúne propuesta y recientes, Pantalla B captura los
+        datos del instrumento y Pantalla C concentra la búsqueda completa.
+        Los widgets se crean una vez para conservar el estado al navegar.
+        """
+        self._construir_navegacion_fase3()
+        return
+
         pad = {"padx": 10, "pady": 6}
 
         self._construir_cabecera()
@@ -323,16 +358,19 @@ class TagGovernanceApp(tk.Tk):
         ttk.Label(frame_sel, text="Área de la planta:").grid(row=0, column=0, sticky="w", **pad)
         self.cb_area = ttk.Combobox(frame_sel, values=list(self.areas.keys()), state="readonly", width=45)
         self.cb_area.grid(row=0, column=1, **pad)
+        self._redirigir_scroll_combobox(self.cb_area)
 
         # "Variable del Proceso" (y no "Variable a medir") para evitar que
         # el operador la confunda con los actuadores.
         ttk.Label(frame_sel, text="Variable del Proceso:").grid(row=1, column=0, sticky="w", **pad)
         self.cb_variable = ttk.Combobox(frame_sel, values=list(self.variables.keys()), state="readonly", width=45)
         self.cb_variable.grid(row=1, column=1, **pad)
+        self._redirigir_scroll_combobox(self.cb_variable)
 
         ttk.Label(frame_sel, text="Función del instrumento:").grid(row=2, column=0, sticky="w", **pad)
         self.cb_funcion = ttk.Combobox(frame_sel, values=list(self.funciones.keys()), state="readonly", width=45)
         self.cb_funcion.grid(row=2, column=1, **pad)
+        self._redirigir_scroll_combobox(self.cb_funcion)
 
         # Autocompletado: en cuanto las 3 selecciones esten completas, se
         # consulta (solo lectura) y se propone el tag automaticamente, sin
@@ -356,12 +394,13 @@ class TagGovernanceApp(tk.Tk):
         ttk.Label(frame_sel, text="Lazo existente:").grid(row=4, column=0, sticky="w", **pad)
         self.cb_lazo = ttk.Combobox(frame_sel, state="disabled", width=45)
         self.cb_lazo.grid(row=4, column=1, **pad)
+        self._redirigir_scroll_combobox(self.cb_lazo)
         self.cb_lazo.bind("<<ComboboxSelected>>", self.actualizar_propuesta)
 
         hint = ttk.Label(
             frame_sel,
             text="Nuevo lazo propone el próximo número libre; un lazo existente reutiliza su número ISA.",
-            foreground="#777", font=("Segoe UI", 8, "italic")
+            style="info.TLabel", font=("Segoe UI", 8, "italic")
         )
         hint.grid(row=5, column=0, columnspan=2, pady=(0, 6))
 
@@ -376,64 +415,49 @@ class TagGovernanceApp(tk.Tk):
         self.lista_existentes.bind("<<ListboxSelect>>", self.on_seleccionar_existente)
 
         # Contenedor para el Tag Propuesto y el botón de Copiar.
-        # Foco visual principal de la pantalla (pedido de Ingeniería,
-        # 28/08/2026): el tag propuesto es la accion mas importante del
-        # flujo, tiene que "saltar a la vista" antes que cualquier otro
-        # elemento. Se usa tk.Label/tk.Button (no ttk) porque el theme
-        # nativo de Windows ignora bg/fg personalizados en ttk -- mismo
-        # motivo que ya se aplico en btn_accion.
-        frame_propuesta = tk.Frame(frame_result, bg=self["bg"])
+        frame_propuesta = ttk.Frame(frame_result)
         frame_propuesta.pack(pady=(4, 12))
 
-        self.lbl_propuesta = tk.Label(
+        self.lbl_propuesta = ttk.Label(
             frame_propuesta,
             text="Tag propuesto: —",
             font=("Segoe UI", 18, "bold"),
-            bg=AMBAR, fg=AZUL,
-            relief="solid", bd=2,
-            padx=22, pady=10,
+            style="warning.TLabel",
+            padding=(22, 10),
         )
         self.lbl_propuesta.pack(side="left", padx=(0, 10))
 
-        self.btn_copiar = tk.Button(
+        self.btn_copiar = ttk.Button(
             frame_propuesta,
             text="📋 Copiar",
             command=self.on_copiar_propuesta,
-            bg=AZUL, fg="white",
-            activebackground="#001433", activeforeground="white",
-            font=("Segoe UI", 11, "bold"),
-            relief="flat", bd=0, padx=16, pady=10,
-            cursor="hand2",
+            style="primary.TButton",
+            padding=(16, 10),
         )
         self.btn_copiar.pack(side="left")
 
-        tk.Label(frame_propuesta, text="Editar:", bg=self["bg"], fg=GRIS,
-                 font=("Segoe UI", 9)).pack(side="left", padx=(10, 4))
+        ttk.Label(frame_propuesta, text="Editar:", style="secondary.TLabel",
+                  font=("Segoe UI", 9)).pack(side="left", padx=(10, 4))
         self.entry_tag = ttk.Entry(frame_propuesta, width=22, font=("Segoe UI", 11))
         self.entry_tag.pack(side="left")
 
-        # Botón para eliminar el tag seleccionado de la lista. Reubicado
-        # al extremo derecho (misma fila que "Copiar"), manteniendo el
-        # estilo discreto original (texto sin ícono, tipografía normal,
-        # sin negrita). La seguridad real de esta acción está en el doble
-        # confirm de on_eliminar().
-        btn_eliminar = tk.Button(
+        # Botón para eliminar el tag seleccionado de la lista.
+        btn_eliminar = ttk.Button(
             frame_propuesta,
             text="Eliminar tag seleccionado",
             command=self.on_eliminar,
-            bg=self["bg"], fg=ROJO_PELIGRO,
-            activebackground="#e8e8e8", activeforeground=ROJO_PELIGRO_HOVER,
-            font=("Segoe UI", 8), relief="flat", bd=0, cursor="hand2",
+            style="danger.Outline.TButton",
+            width=28,
         )
         btn_eliminar.pack(side="right", padx=(10, 0))
         self.entry_tag.bind("<KeyRelease>", self._on_entry_tag_cambio)
 
         # Lectura humana del tag propuesto (Paso 2, debajo de "Tag propuesto").
-        self.lbl_traduccion = tk.Label(
+        self.lbl_traduccion = ttk.Label(
             frame_result, text="",
-            bg="#FFF9C4", fg=AZUL,
+            style="warning.TLabel",
             font=("Arial", 14, "bold"),
-            padx=20, pady=15,
+            padding=(20, 15),
             anchor="center",
         )
         self.lbl_traduccion.pack(anchor="center", fill="x", padx=16, pady=(4, 8))
@@ -452,7 +476,7 @@ class TagGovernanceApp(tk.Tk):
 
         self.entries = {}
         campos = [
-            ("descripcion", "Descripción del elemento / Lazo"),
+            ("descripcion", "Descripción del instrumento (OBLIGATORIO)"),
             ("ubicacion", "Ubicación física"),
             ("fabricante", "Fabricante"),
             ("modelo", "Modelo"),
@@ -465,25 +489,19 @@ class TagGovernanceApp(tk.Tk):
             entry = ttk.Entry(frame_datos, width=28)
             entry.grid(row=r, column=c * 2 + 1, sticky="ew", padx=(0, 10), pady=4)
             self.entries[key] = entry
-
-        # Comentarios / Notas: texto libre para especificaciones rápidas
-        # (ej. "Válvula de 12 pulgadas") que no ameritan forzarse dentro
-        # de la Descripción del punto de medición. Ocupa el ancho completo
-        # de las dos columnas de entrada (columnspan 1-3, sticky="ew").
-        ttk.Label(frame_datos, text="Comentarios / Notas:").grid(row=3, column=0, sticky="w", padx=(10, 4), pady=4)
-        entry_comentarios = ttk.Entry(frame_datos, width=64)
-        entry_comentarios.grid(row=3, column=1, columnspan=3, sticky="ew", padx=(0, 10), pady=4)
-        self.entries["comentarios"] = entry_comentarios
+            if key == "descripcion":
+                self.entry_descripcion = entry
 
         # "Registrado por" = catálogo de usuarios (seleccionable + agregable),
         # en vez de un texto libre, para mantener consistencia de nombres.
-        ttk.Label(frame_datos, text="Registrado por (usuario):").grid(row=4, column=0, sticky="w", padx=(10, 4), pady=4)
+        ttk.Label(frame_datos, text="Registrado por (usuario):").grid(row=3, column=0, sticky="w", padx=(10, 4), pady=4)
         self.cb_usuario = ttk.Combobox(frame_datos, state="readonly", width=25, values=self.usuarios)
-        self.cb_usuario.grid(row=4, column=1, sticky="ew", padx=(0, 4), pady=4)
+        self.cb_usuario.grid(row=3, column=1, sticky="ew", padx=(0, 4), pady=4)
+        self._redirigir_scroll_combobox(self.cb_usuario)
         self.btn_add_usuario = ttk.Button(frame_datos, text="➕", width=3, command=self.on_agregar_usuario)
-        self.btn_add_usuario.grid(row=4, column=2, sticky="w", padx=(0, 10), pady=4)
+        self.btn_add_usuario.grid(row=3, column=2, sticky="w", padx=(0, 10), pady=4)
 
-        ttk.Label(frame_datos, text="Estado:").grid(row=5, column=0, sticky="w", padx=(10, 4), pady=4)
+        ttk.Label(frame_datos, text="Estado:").grid(row=4, column=0, sticky="w", padx=(10, 4), pady=4)
         self.cb_estado = ttk.Combobox(
             frame_datos, state="readonly", width=25,
             # "Retirado" agregado (28/08/2026): es el estado correcto para
@@ -492,69 +510,66 @@ class TagGovernanceApp(tk.Tk):
             values=["Planificado", "Instalado", "Fuera de Servicio", "Retirado"]
         )
         self.cb_estado.set("Planificado")
-        self.cb_estado.grid(row=5, column=1, sticky="ew", padx=(0, 10), pady=4)
+        self.cb_estado.grid(row=4, column=1, sticky="ew", padx=(0, 10), pady=4)
+        self._redirigir_scroll_combobox(self.cb_estado)
 
         # Datatype real del PLC (opcional) -- meramente informativo: de ahí
         # ANTES se infería el Tipo de Señal, hoy es un control manual.
-        ttk.Label(frame_datos, text="Datatype (PLC):").grid(row=5, column=2, sticky="w", padx=(10, 4), pady=4)
+        ttk.Label(frame_datos, text="Datatype (PLC):").grid(row=4, column=2, sticky="w", padx=(10, 4), pady=4)
         self.cb_datatype = ttk.Combobox(
             frame_datos, width=20,
             values=["BOOL", "REAL", "INT", "DINT", "STRING"]
         )
-        self.cb_datatype.grid(row=5, column=3, sticky="ew", padx=(0, 10), pady=4)
+        self.cb_datatype.grid(row=4, column=3, sticky="ew", padx=(0, 10), pady=4)
+        self._redirigir_scroll_combobox(self.cb_datatype)
 
         # Tipo de Señal y Entrada/Salida (28/08/2026): antes se inferían
         # del datatype/alias del PLC al vuelo; ahora son CONTROLES
         # EXPLÍCITOS que el operador elige a mano y se guardan en columnas
         # propias de la tabla (tipo_senal / entrada_salida).
-        ttk.Label(frame_datos, text="Tipo de Señal:").grid(row=6, column=0, sticky="w", padx=(10, 4), pady=4)
+        ttk.Label(frame_datos, text="Tipo de Señal:").grid(row=5, column=0, sticky="w", padx=(10, 4), pady=4)
         self.cb_tipo_senal = ttk.Combobox(
             frame_datos, state="readonly", width=20,
             values=["Analógico", "Digital", "Desconocido"]
         )
         self.cb_tipo_senal.set("Desconocido")
-        self.cb_tipo_senal.grid(row=6, column=1, sticky="ew", padx=(0, 10), pady=4)
+        self.cb_tipo_senal.grid(row=5, column=1, sticky="ew", padx=(0, 10), pady=4)
+        self._redirigir_scroll_combobox(self.cb_tipo_senal)
 
-        ttk.Label(frame_datos, text="Entrada/Salida:").grid(row=6, column=2, sticky="w", padx=(10, 4), pady=4)
+        ttk.Label(frame_datos, text="Entrada/Salida:").grid(row=5, column=2, sticky="w", padx=(10, 4), pady=4)
         self.cb_io = ttk.Combobox(
             frame_datos, state="readonly", width=20,
             values=["Entrada", "Salida", "Memoria / Red", "N/D"]
         )
         self.cb_io.set("N/D")
-        self.cb_io.grid(row=6, column=3, sticky="ew", padx=(0, 10), pady=4)
+        self.cb_io.grid(row=5, column=3, sticky="ew", padx=(0, 10), pady=4)
+        self._redirigir_scroll_combobox(self.cb_io)
 
         # Fluido/Producto (opcional, 28/08/2026): PURAMENTE INFORMATIVO --
         # nunca entra en tag_completo (el Manual de Estandarización
         # prohíbe nombres de material de proceso en el nombre del tag).
         # Editable (no readonly): la lista cubre los fluidos mas comunes
         # del Ingenio, pero no puede ser exhaustiva.
-        ttk.Label(frame_datos, text="Fluido / Producto (informativo):").grid(row=7, column=0, sticky="w", padx=(10, 4), pady=4)
+        ttk.Label(frame_datos, text="Fluido / Producto (informativo):").grid(row=6, column=0, sticky="w", padx=(10, 4), pady=4)
         self.cb_fluido = ttk.Combobox(
             frame_datos, width=28,
             values=["Alcohol 90°", "Alcohol 96°", "Alcohol 99°", "Agua pura",
                     "Agua común", "Flegmasa", "Vino", "CO2", "Vapor"]
         )
-        self.cb_fluido.grid(row=7, column=1, sticky="ew", padx=(0, 10), pady=4)
+        self.cb_fluido.grid(row=6, column=1, sticky="ew", padx=(0, 10), pady=4)
+        self._redirigir_scroll_combobox(self.cb_fluido)
 
         # ---------------- Paso 4: confirmar / actualizar ----------------
-        # Boton de accion principal como Call to Action: se usa tk.Button
-        # (no ttk.Button) porque en el theme nativo de Windows ttk ignora
-        # los colores de fondo/texto personalizados; tk.Button si los
-        # respeta. Este boton cambia dinamicamente entre "Guardar" (verde,
-        # alta de un tag nuevo) y "Actualizar" (azul, edicion de uno
-        # existente) segun _entrar_modo_edicion / _salir_modo_edicion.
-        self.btn_accion = tk.Button(
-            self.contenedor, text="✔  Confirmar y Guardar Tag",
+        self.btn_accion = ttk.Button(
+            self.contenedor,
+            text="✔  Confirmar y Guardar Tag",
             command=self.on_guardar,
-            bg=VERDE_CONFIRMA, fg="white",
-            activebackground=VERDE_CONFIRMA_HOVER, activeforeground="white",
-            font=("Segoe UI", 13, "bold"),
-            relief="flat", bd=0, padx=28, pady=10,
-            cursor="hand2",
+            style="success.TButton",
+            padding=(28, 10),
         )
         self.btn_accion.pack(pady=16)
 
-        self.status = ttk.Label(self.contenedor, text="", foreground="#0a6e31")
+        self.status = ttk.Label(self.contenedor, text="", style="success.TLabel")
         self.status.pack()
 
         self._build_grilla_general()
@@ -564,12 +579,193 @@ class TagGovernanceApp(tk.Tk):
         # sí lo tienen, Treeview/Listbox/Combobox, se excluyen).
         self._vincular_rueda()
 
+    # ============================================================
+    # Fase 3 — Arquitectura de navegación
+    # ============================================================
+    def _construir_navegacion_fase3(self):
+        self._construir_cabecera()
+        self._scrollbar.pack_forget()
+        self.vistas = {}
+        for nombre in ("inicio", "datos", "busqueda"):
+            vista = ttk.Frame(self.contenedor, padding=16)
+            self.vistas[nombre] = vista
+        self.vista_inicio = self.vistas["inicio"]
+        self.vista_datos = self.vistas["datos"]
+        self.vista_busqueda = self.vistas["busqueda"]
+        self._construir_pantalla_inicio()
+        self._construir_pantalla_datos()
+        self._construir_pantalla_busqueda()
+        self.status = ttk.Label(self.contenedor, text="", style="success.TLabel")
+        self.status.pack(side="bottom", fill="x", padx=16, pady=(0, 8))
+        self.mostrar_vista("inicio")
+        self.refrescar_tags_recientes()
+        self.refrescar_paso5()
+
+    def mostrar_vista(self, nombre):
+        """Oculta la vista actual y muestra una sola pantalla persistente."""
+        for vista in self.vistas.values():
+            vista.pack_forget()
+        self.vistas[nombre].pack(fill="both", expand=True)
+        if nombre == "inicio":
+            self.refrescar_tags_recientes()
+        elif nombre == "busqueda":
+            self.refrescar_paso5()
+
+    def _construir_pantalla_inicio(self):
+        vista = self.vista_inicio
+        vista.columnconfigure(0, weight=3)
+        vista.columnconfigure(1, weight=2)
+        vista.rowconfigure(0, weight=1)
+        izquierda = ttk.Labelframe(vista, text="Crear Nuevo Tag", padding=14)
+        derecha = ttk.Labelframe(vista, text="Búsqueda Rápida", padding=14)
+        izquierda.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        derecha.grid(row=0, column=1, sticky="nsew")
+        izquierda.columnconfigure(1, weight=1)
+
+        ttk.Label(izquierda, text="Área de la planta:").grid(row=0, column=0, sticky="w", pady=5)
+        self.cb_area = ttk.Combobox(izquierda, values=list(self.areas), state="readonly")
+        self.cb_area.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
+        ttk.Label(izquierda, text="Variable del Proceso:").grid(row=1, column=0, sticky="w", pady=5)
+        self.cb_variable = ttk.Combobox(izquierda, values=list(self.variables), state="readonly")
+        self.cb_variable.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=5)
+        ttk.Label(izquierda, text="Función del instrumento:").grid(row=2, column=0, sticky="w", pady=5)
+        self.cb_funcion = ttk.Combobox(izquierda, values=list(self.funciones), state="readonly")
+        self.cb_funcion.grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=5)
+        for cb in (self.cb_area, self.cb_variable, self.cb_funcion):
+            self._redirigir_scroll_combobox(cb)
+            cb.bind("<<ComboboxSelected>>", self.verificar_y_consultar)
+
+        ttk.Label(izquierda, text="Asignación de lazo:").grid(row=3, column=0, sticky="w", pady=5)
+        modo = ttk.Frame(izquierda)
+        modo.grid(row=3, column=1, sticky="w", padx=(10, 0), pady=5)
+        ttk.Radiobutton(modo, text="Nuevo lazo", variable=self.modo_lazo, value="nuevo", command=self._on_modo_lazo_cambio).pack(side="left")
+        ttk.Radiobutton(modo, text="Lazo existente", variable=self.modo_lazo, value="existente", command=self._on_modo_lazo_cambio).pack(side="left", padx=12)
+        ttk.Label(izquierda, text="Lazo existente:").grid(row=4, column=0, sticky="w", pady=5)
+        self.cb_lazo = ttk.Combobox(izquierda, state="disabled")
+        self.cb_lazo.grid(row=4, column=1, sticky="ew", padx=(10, 0), pady=5)
+        self.cb_lazo.bind("<<ComboboxSelected>>", self.actualizar_propuesta)
+        self._redirigir_scroll_combobox(self.cb_lazo)
+
+        ttk.Label(izquierda, text="Paso 2 — Tags existentes", style="info.TLabel").grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 4))
+        self.lista_existentes = tk.Listbox(izquierda, height=7)
+        self.lista_existentes.grid(row=6, column=0, columnspan=2, sticky="ew")
+        self.lista_existentes.bind("<<ListboxSelect>>", self.on_seleccionar_existente)
+        propuesta = ttk.Frame(izquierda)
+        propuesta.grid(row=7, column=0, columnspan=2, sticky="ew", pady=12)
+        self.lbl_propuesta = ttk.Label(propuesta, text="Tag propuesto: —", style="warning.TLabel", font=("Segoe UI", 16, "bold"), padding=10)
+        self.lbl_propuesta.pack(side="left", fill="x", expand=True)
+        self.btn_copiar = ttk.Button(propuesta, text="📋 Copiar", command=self.on_copiar_propuesta, style="primary.TButton")
+        self.btn_copiar.pack(side="left", padx=(8, 0))
+        self.entry_tag = ttk.Entry(izquierda)
+        self.entry_tag.grid(row=8, column=0, columnspan=2, sticky="ew")
+        self.entry_tag.bind("<KeyRelease>", self._on_entry_tag_cambio)
+        self.lbl_traduccion = ttk.Label(izquierda, text="", style="secondary.TLabel", wraplength=620)
+        self.lbl_traduccion.grid(row=9, column=0, columnspan=2, sticky="ew", pady=8)
+        acciones = ttk.Frame(izquierda)
+        acciones.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Button(acciones, text="Eliminar tag seleccionado", command=self.on_eliminar, style="danger.Outline.TButton").pack(side="left")
+        self.btn_siguiente = ttk.Button(acciones, text="SIGUIENTE →", command=self.ir_a_datos, style="success.TButton", state="disabled")
+        self.btn_siguiente.pack(side="right")
+
+        derecha.rowconfigure(2, weight=1)
+        ttk.Label(derecha, text="Tags recientes", font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w")
+        barra = ttk.Frame(derecha)
+        barra.grid(row=1, column=0, sticky="ew", pady=8)
+        self.entry_busqueda_rapida = ttk.Entry(barra)
+        self.entry_busqueda_rapida.pack(side="left", fill="x", expand=True)
+        self.entry_busqueda_rapida.bind("<Return>", lambda _e: self.abrir_busqueda_rapida())
+        ttk.Button(barra, text="Buscar", command=self.abrir_busqueda_rapida, style="primary.TButton").pack(side="left", padx=(6, 0))
+        self.tree_recientes = ttk.Treeview(derecha, columns=("tag", "estado", "fecha"), show="headings", height=16)
+        for col, title, width in (("tag", "Tag", 170), ("estado", "Estado", 110), ("fecha", "Creado", 145)):
+            self.tree_recientes.heading(col, text=title); self.tree_recientes.column(col, width=width, anchor="w")
+        self.tree_recientes.grid(row=2, column=0, sticky="nsew")
+        self.tree_recientes.bind("<<TreeviewSelect>>", self._detalle_reciente)
+        ttk.Button(derecha, text="EXPANDIR BÚSQUEDA", command=lambda: self.mostrar_vista("busqueda"), style="info.TButton").grid(row=3, column=0, sticky="ew", pady=(12, 0))
+
+    def _construir_pantalla_datos(self):
+        vista = self.vista_datos
+        vista.columnconfigure(1, weight=1); vista.columnconfigure(3, weight=1)
+        ttk.Label(vista, text="Datos del Instrumento", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, columnspan=4, sticky="w")
+        self.lbl_tag_datos = ttk.Label(vista, text="Tag: —", style="warning.TLabel", font=("Segoe UI", 18, "bold"), padding=12)
+        self.lbl_tag_datos.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(10, 16))
+        self.entries = {}
+        campos = [("descripcion", "Descripción del instrumento *"), ("ubicacion", "Ubicación física"), ("fabricante", "Fabricante"), ("modelo", "Modelo"), ("rango_medicion", "Rango de medición"), ("unidad", "Unidad de ingeniería")]
+        for i, (key, label) in enumerate(campos):
+            r, c = divmod(i, 2); ttk.Label(vista, text=label).grid(row=2+r, column=c*2, sticky="w", pady=6)
+            e = ttk.Entry(vista); e.grid(row=2+r, column=c*2+1, sticky="ew", padx=(8, 16), pady=6); self.entries[key] = e
+        self.entry_descripcion = self.entries["descripcion"]
+        ttk.Label(vista, text="Registrado por (usuario) *").grid(row=5, column=0, sticky="w", pady=6)
+        self.cb_usuario = ttk.Combobox(vista, values=self.usuarios, state="readonly"); self.cb_usuario.grid(row=5, column=1, sticky="ew", padx=(8,16), pady=6)
+        ttk.Button(vista, text="➕", command=self.on_agregar_usuario, width=3).grid(row=5, column=2, sticky="w")
+        ttk.Label(vista, text="Estado").grid(row=6, column=0, sticky="w", pady=6)
+        self.cb_estado = ttk.Combobox(vista, values=["Planificado", "Instalado", "Fuera de Servicio", "Retirado"], state="readonly"); self.cb_estado.set("Planificado"); self.cb_estado.grid(row=6, column=1, sticky="ew", padx=(8,16), pady=6)
+        ttk.Label(vista, text="Tipo de Señal").grid(row=6, column=2, sticky="w", pady=6)
+        self.cb_tipo_senal = ttk.Combobox(vista, values=["Analógico", "Digital", "Desconocido"], state="readonly"); self.cb_tipo_senal.set("Desconocido"); self.cb_tipo_senal.grid(row=6, column=3, sticky="ew", pady=6)
+        ttk.Label(vista, text="Entrada/Salida").grid(row=7, column=0, sticky="w", pady=6)
+        self.cb_io = ttk.Combobox(vista, values=["Entrada", "Salida", "Memoria / Red", "N/D"], state="readonly"); self.cb_io.set("N/D"); self.cb_io.grid(row=7, column=1, sticky="ew", padx=(8,16), pady=6)
+        ttk.Label(vista, text="Fluido / Producto").grid(row=7, column=2, sticky="w", pady=6)
+        self.cb_fluido = ttk.Combobox(vista, values=["Alcohol 90°", "Alcohol 96°", "Agua pura", "Vapor"]); self.cb_fluido.grid(row=7, column=3, sticky="ew", pady=6)
+        self.cb_datatype = ttk.Combobox(vista, values=["BOOL", "REAL", "INT", "DINT", "STRING"])
+        botones = ttk.Frame(vista); botones.grid(row=8, column=0, columnspan=4, sticky="ew", pady=24)
+        ttk.Button(botones, text="← ATRÁS", command=lambda: self.mostrar_vista("inicio"), style="secondary.TButton").pack(side="left")
+        self.btn_accion = ttk.Button(botones, text="GUARDAR TAG", command=self.on_guardar, style="success.TButton")
+        self.btn_accion.pack(side="right")
+
+    def _construir_pantalla_busqueda(self):
+        vista = self.vista_busqueda; vista.rowconfigure(2, weight=1); vista.columnconfigure(0, weight=1)
+        barra = ttk.Frame(vista); barra.grid(row=0, column=0, sticky="ew")
+        ttk.Button(barra, text="← VOLVER", command=lambda: self.mostrar_vista("inicio"), style="secondary.TButton").pack(side="left")
+        self.btn_exportar = ttk.Button(barra, text="Exportar a Excel", command=self.on_exportar_excel, style="success.TButton"); self.btn_exportar.pack(side="right")
+        ttk.Label(vista, text="Búsqueda expandida", font=("Segoe UI", 18, "bold")).grid(row=1, column=0, sticky="w", pady=(16,6))
+        buscar = ttk.Frame(vista); buscar.grid(row=2, column=0, sticky="nsew"); buscar.columnconfigure(0, weight=1); buscar.rowconfigure(1, weight=1)
+        self.entry_buscar = ttk.Entry(buscar); self.entry_buscar.grid(row=0, column=0, sticky="ew", pady=(0,8)); self.entry_buscar.bind("<KeyRelease>", self._on_buscar_cambio)
+        self.lbl_resultado_busqueda = ttk.Label(buscar, text="", style="secondary.TLabel"); self.lbl_resultado_busqueda.grid(row=0, column=1, padx=(10,0))
+        columnas=("tag","estado","tipo_senal","io","fluido","fecha","descripcion")
+        self.tree_tags=ttk.Treeview(buscar, columns=columnas, show="headings", selectmode="extended")
+        for col,title,width in (("tag","Tag",150),("estado","Estado",110),("tipo_senal","Tipo de Señal",110),("io","Entrada/Salida",120),("fluido","Fluido/Product",130),("fecha","Fecha/Hora creación",150),("descripcion","Descripción/Alias",350)):
+            self.tree_tags.heading(col,text=title); self.tree_tags.column(col,width=width,anchor="w")
+        self.tree_tags.grid(row=1,column=0,columnspan=2,sticky="nsew"); self.tree_tags.bind("<Double-1>", self._on_grilla_doble_click); self.tree_tags.tag_configure("retirado", foreground=ROJO_PELIGRO)
+
+    def ir_a_datos(self):
+        if not self.tag_propuesto:
+            return
+        self.lbl_tag_datos.config(text=f"Tag propuesto: {self.tag_propuesto}")
+        self.mostrar_vista("datos")
+
+    def refrescar_tags_recientes(self):
+        if not hasattr(self, "tree_recientes"): return
+        self.tree_recientes.delete(*self.tree_recientes.get_children())
+        for fila in db.buscar_tags("")[:10]:
+            self.tree_recientes.insert("", tk.END, iid=fila["tag_completo"], values=(fila["tag_completo"], fila["estado"], fila["fecha_creacion"] or ""))
+
+    def abrir_busqueda_rapida(self):
+        texto = self.entry_busqueda_rapida.get().strip(); self.mostrar_vista("busqueda"); self.entry_buscar.delete(0,tk.END); self.entry_buscar.insert(0,text); self._refrescar_grilla_general(texto)
+
+    def _detalle_reciente(self, _event=None):
+        seleccion=self.tree_recientes.selection()
+        if seleccion: self.mostrar_detalle_tag(seleccion[0])
+
+    def mostrar_detalle_tag(self, tag_codigo):
+        fila=db.obtener_tag_completo(tag_codigo)
+        if fila is None: return
+        ventana=tk.Toplevel(self); ventana.title(f"Detalle — {tag_codigo}"); ventana.geometry("620x520")
+        cuerpo=ttk.Frame(ventana,padding=18); cuerpo.pack(fill="both",expand=True)
+        ttk.Label(cuerpo,text=tag_codigo,font=("Segoe UI",18,"bold"),style="warning.TLabel").pack(anchor="w",pady=(0,12))
+        for clave,titulo in (("descripcion","Descripción"),("estado","Estado"),("ubicacion","Ubicación"),("fabricante","Fabricante"),("modelo","Modelo"),("rango_medicion","Rango"),("unidad","Unidad"),("tipo_senal","Tipo de Señal"),("entrada_salida","Entrada/Salida"),("fluido_proceso","Fluido/Producto"),("creado_por","Registrado por"),("fecha_creacion","Creado")):
+            ttk.Label(cuerpo,text=f"{titulo}: {fila[clave] or '—'}").pack(anchor="w",pady=2)
+        acciones=ttk.Frame(cuerpo); acciones.pack(fill="x",pady=16)
+        ttk.Button(acciones,text="Editar",command=lambda:(ventana.destroy(),self._abrir_edicion(fila)),style="primary.TButton").pack(side="left")
+        ttk.Button(acciones,text="Cerrar",command=ventana.destroy).pack(side="right")
+
+    def _abrir_edicion(self, fila):
+        self._entrar_modo_edicion(fila); self.lbl_tag_datos.config(text=f"Editando: {fila['tag_completo']}"); self.mostrar_vista("datos")
+
     def _build_grilla_general(self):
         """Paso 5 (28/08/2026, pedido de Ingeniería): buscador inteligente
         + grilla general de TODOS los tags de la base (no solo los de la
         categoría Área/Variable/Función seleccionada arriba, a diferencia
         del Listbox del Paso 2). Filtra en tiempo real por tag,
-        descripción, comentarios/alias o PLC de origen (db.buscar_tags)."""
+        descripción, alias o PLC de origen (db.buscar_tags)."""
         frame_grilla = ttk.LabelFrame(self.contenedor, text="Paso 5 - Buscar / consultar todos los tags")
         frame_grilla.pack(fill="both", expand=True, padx=10, pady=(4, 10))
 
@@ -583,22 +779,24 @@ class TagGovernanceApp(tk.Tk):
         # chica (cientos de tags), no miles -- no hace falta debounce.
         self.entry_buscar.bind("<KeyRelease>", self._on_buscar_cambio)
 
-        self.lbl_resultado_busqueda = ttk.Label(frame_buscar, text="", foreground=GRIS)
+        self.lbl_resultado_busqueda = ttk.Label(frame_buscar, text="", style="secondary.TLabel")
         self.lbl_resultado_busqueda.pack(side="left", padx=(10, 0))
 
-        self.btn_exportar = tk.Button(
-            frame_buscar, text="Exportar Excel", command=self.on_exportar_excel,
-            bg="#2ECC71", fg="white", activebackground="#27AE60", activeforeground="white",
-            font=("Arial", 10, "bold"), relief="flat", bd=0, padx=14, pady=6,
-            cursor="hand2",
+        self.btn_exportar = ttk.Button(
+            frame_buscar,
+            text="Exportar Excel",
+            command=self.on_exportar_excel,
+            style="success.TButton",
+            padding=(14, 6),
         )
         self.btn_exportar.pack(side="right", padx=(10, 0))
 
-        self.btn_recargar = tk.Button(
-            frame_buscar, text="🔄 Recargar", command=self._recargar_app,
-            bg=AZUL, fg="white", activebackground="#001433", activeforeground="white",
-            font=("Arial", 10, "bold"), relief="flat", bd=0, padx=12, pady=6,
-            cursor="hand2",
+        self.btn_recargar = ttk.Button(
+            frame_buscar,
+            text="🔄 Recargar",
+            command=self._recargar_app,
+            style="primary.TButton",
+            padding=(12, 6),
         )
         self.btn_recargar.pack(side="right", padx=(10, 0))
 
@@ -693,7 +891,7 @@ class TagGovernanceApp(tk.Tk):
         for e in self.entries.values():
             e.delete(0, tk.END)
         self._set_entry_tag("")
-        self.lbl_propuesta.config(text="Tag propuesto: —", bg=AMBAR, fg=AZUL)
+        self.lbl_propuesta.config(text="Tag propuesto: —", style="warning.TLabel")
         self._actualizar_traduccion()
         self.lista_existentes.delete(0, tk.END)
         self.entry_buscar.delete(0, tk.END)
@@ -735,14 +933,10 @@ class TagGovernanceApp(tk.Tk):
         )
 
     def _on_grilla_doble_click(self, event=None):
+        """Abre el detalle de un tag sin abandonar la búsqueda expandida."""
         seleccion = self.tree_tags.selection()
-        if not seleccion:
-            return
-        tag_codigo = seleccion[0]
-        fila = db.obtener_tag_completo(tag_codigo)
-        if fila is None:
-            return
-        self._entrar_modo_edicion(fila)
+        if seleccion:
+            self.mostrar_detalle_tag(seleccion[0])
 
     # ------------------------------------------------------------
     def verificar_y_consultar(self, event=None):
@@ -790,7 +984,9 @@ class TagGovernanceApp(tk.Tk):
         self.tag_propuesto = None
         self.numero_propuesto = None
         self._set_entry_tag("")
-        self.lbl_propuesta.config(text=mensaje, bg=AMBAR, fg=AZUL)
+        self.lbl_propuesta.config(text=mensaje, style="warning.TLabel")
+        if hasattr(self, "btn_siguiente"):
+            self.btn_siguiente.config(state="disabled")
         self._actualizar_traduccion()
 
     def actualizar_propuesta(self):
@@ -826,7 +1022,9 @@ class TagGovernanceApp(tk.Tk):
         self.tag_propuesto = tag_propuesto
         self.numero_propuesto = numero
         self._set_entry_tag(tag_propuesto)
-        self.lbl_propuesta.config(text=f"Tag propuesto: {tag_propuesto}", bg=AMBAR, fg=AZUL)
+        self.lbl_propuesta.config(text=f"Tag propuesto: {tag_propuesto}", style="warning.TLabel")
+        if hasattr(self, "btn_siguiente"):
+            self.btn_siguiente.config(state="normal")
         self.status.config(text=f"Tag propuesto: '{tag_propuesto}' (todavía no guardado).")
         self._actualizar_traduccion()
 
@@ -873,9 +1071,8 @@ class TagGovernanceApp(tk.Tk):
             return
 
         self._entrar_modo_edicion(fila)
-
-        # Se mantiene el Paso 5 poblado en su totalidad: seleccionar un
-        # tag en el Paso 2 no debe vaciar ni filtrar la grilla.
+        self.lbl_tag_datos.config(text=f"Editando: {tag_codigo}")
+        self.mostrar_vista("datos")
         self.refrescar_paso5()
 
     def _entrar_modo_edicion(self, fila):
@@ -899,8 +1096,6 @@ class TagGovernanceApp(tk.Tk):
         self.entries["rango_medicion"].insert(0, fila["rango_medicion"] or "")
         self.entries["unidad"].delete(0, tk.END)
         self.entries["unidad"].insert(0, fila["unidad"] or "")
-        self.entries["comentarios"].delete(0, tk.END)
-        self.entries["comentarios"].insert(0, fila["comentarios"] or "")
         self.cb_usuario.set(fila["creado_por"] or "")
         self.cb_estado.set(fila["estado"] or "Planificado")
         try:
@@ -922,7 +1117,7 @@ class TagGovernanceApp(tk.Tk):
 
         # Bg distinto en modo edicion (celeste claro) para que se note a
         # simple vista que ya no esta proponiendo un tag nuevo.
-        self.lbl_propuesta.config(text=f"Editando tag: {tag_completo}", bg="#CFE3FF", fg=AZUL)
+        self.lbl_propuesta.config(text=f"Editando tag: {tag_completo}", style="info.TLabel")
         self.status.config(
             text=f"Editando '{tag_completo}'. Modifique los campos y presione 'Actualizar'."
         )
@@ -930,7 +1125,7 @@ class TagGovernanceApp(tk.Tk):
         self.btn_accion.config(
             text="✎  Actualizar Tag Seleccionado",
             command=self.on_actualizar,
-            bg=AZUL, activebackground="#001433",
+            style="primary.TButton",
         )
 
     def _salir_modo_edicion(self):
@@ -939,13 +1134,13 @@ class TagGovernanceApp(tk.Tk):
         self.btn_accion.config(
             text="✔  Confirmar y Guardar Tag",
             command=self.on_guardar,
-            bg=VERDE_CONFIRMA, activebackground=VERDE_CONFIRMA_HOVER,
+            style="success.TButton",
         )
         # Restaura el look "propuesta" (ambar) del chip -- si el usuario
         # todavia no completo Area+Variable+Funcion, actualizar_propuesta()
         # no se va a disparar despues de esto, asi que hay que resetear
         # el chip aca tambien para no dejarlo con el celeste de edicion.
-        self.lbl_propuesta.config(text="Tag propuesto: —", bg=AMBAR, fg=AZUL)
+        self.lbl_propuesta.config(text="Tag propuesto: —", style="warning.TLabel")
         self._set_entry_tag("")
         self._actualizar_traduccion()
 
@@ -967,21 +1162,15 @@ class TagGovernanceApp(tk.Tk):
         modelo = self.entries["modelo"].get().strip()
         rango_medicion = self.entries["rango_medicion"].get().strip()
         unidad = self.entries["unidad"].get().strip()
-        comentarios = self.entries["comentarios"].get().strip()
         creado_por = self.cb_usuario.get().strip()
 
-        # Misma regla que en el alta: la descripción no es estrictamente
-        # obligatoria si hay Comentarios / Notas cargados.
-        descripcion = self.entries["descripcion"].get().strip()
+        descripcion = self.entry_descripcion.get().strip()
         if not descripcion:
-            if comentarios:
-                descripcion = comentarios
-            else:
-                messagebox.showwarning(
-                    "Falta descripción",
-                    "Ingrese una Descripción del elemento / Lazo, o al menos un Comentario / Nota."
-                )
-                return
+            messagebox.showerror(
+                "Campo requerido",
+                "La descripción del instrumento es obligatoria",
+            )
+            return
 
         confirmar = messagebox.askyesno(
             "Confirmar actualización",
@@ -1000,7 +1189,6 @@ class TagGovernanceApp(tk.Tk):
             modelo=modelo,
             rango_medicion=rango_medicion,
             unidad=unidad,
-            comentarios=comentarios,
             estado=self.cb_estado.get(),
             modificado_por=creado_por,
             datatype=self.cb_datatype.get().strip(),
@@ -1060,30 +1248,21 @@ class TagGovernanceApp(tk.Tk):
         modelo = self.entries["modelo"].get().strip()
         rango_medicion = self.entries["rango_medicion"].get().strip()
         unidad = self.entries["unidad"].get().strip()
-        comentarios = self.entries["comentarios"].get().strip()
-        creado_por = self.cb_usuario.get().strip()  # seleccionado del catálogo (opcional)
+        creado_por = self.cb_usuario.get().strip()
         if not creado_por:
-            messagebox.showwarning(
+            messagebox.showerror(
                 "Usuario requerido",
-                "Debe ingresar un usuario antes de guardar",
+                "Seleccione el usuario que registra el instrumento",
             )
             return
 
-        # --- Descripción del elemento / Lazo: ya NO es estrictamente
-        # obligatoria. Si el operador la dejó en blanco pero cargó algo en
-        # Comentarios / Notas, ese texto se usa como descripción por
-        # defecto para no bloquear el guardado. Solo se advierte si AMBOS
-        # campos quedaron vacíos.
-        descripcion = self.entries["descripcion"].get().strip()
+        descripcion = self.entry_descripcion.get().strip()
         if not descripcion:
-            if comentarios:
-                descripcion = comentarios
-            else:
-                messagebox.showwarning(
-                    "Falta descripción",
-                    "Ingrese una Descripción del elemento / Lazo, o al menos un Comentario / Nota."
-                )
-                return
+            messagebox.showerror(
+                "Campo requerido",
+                "La descripción del instrumento es obligatoria",
+            )
+            return
 
         tag_a_guardar = self.entry_tag.get().strip() or self.tag_propuesto
         try:
@@ -1115,7 +1294,6 @@ class TagGovernanceApp(tk.Tk):
                 modelo=modelo,
                 rango_medicion=rango_medicion,
                 unidad=unidad,
-                comentarios=comentarios,
                 estado=self.cb_estado.get(),
                 creado_por=creado_por,
                 datatype=self.cb_datatype.get().strip(),
@@ -1140,12 +1318,13 @@ class TagGovernanceApp(tk.Tk):
         self.cb_tipo_senal.set("Desconocido")
         self.cb_io.set("N/D")
         self.cb_fluido.set("")
-        self.lbl_propuesta.config(text="Tag propuesto: —", bg=AMBAR, fg=AZUL)
+        self.lbl_propuesta.config(text="Tag propuesto: —", style="warning.TLabel")
 
-        # Refresca el Listbox (ya incluye el tag recien creado) y propone
-        # automaticamente el siguiente correlativo libre. Solo lectura.
+        # Refresca el Listbox, la búsqueda expandida y la lista de recientes.
         self.actualizar_propuesta()
         self.refrescar_paso5()
+        self.refrescar_tags_recientes()
+        self.mostrar_vista("inicio")
 
         faltantes, sugerencias = auditar_tag_recien_guardado(tag_guardado, db.buscar_tags(""))
         if faltantes:

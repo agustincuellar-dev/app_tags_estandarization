@@ -1,0 +1,8 @@
+# Dependencia requerida para iniciar la interfaz con tema oscuro.
+ttkbootstrap==2.2.2
+
+# Funciones opcionales de la aplicación: logos, exportación Excel y esquema de lazo.
+Pillow>=10
+openpyxl>=3.1
+networkx>=3.0
+matplotlib>=3.7
