@@ -20,6 +20,11 @@ from ttkbootstrap.constants import *
 from tkinter import ttk, messagebox, simpledialog
 import database as db
 from validador_isa import auditar_tag_recien_guardado
+from isa_rules import (
+    funcion_sugerida_por_asistente,
+    funciones_permitidas_para_variable,
+    validar_funcion_isa,
+)
 
 try:
     from PIL import Image, ImageTk
@@ -56,7 +61,7 @@ MAPEO_VARIABLES = {
     "S": "Velocidad", "V": "Vibración", "G": "Gases",
 }
 MAPEO_FUNCIONES = {
-    "T": "Transmisor", "C": "Controlador", "IC": "Controlador Indicador",
+    "T": "Transmisor", "IT": "Transmisor Indicador", "C": "Controlador", "IC": "Controlador Indicador",
     "V": "Válvula", "I": "Indicador", "R": "Registrador", "G": "Mirilla/Visor",
     "S": "Switch", "H": "Alta", "L": "Baja",
 }
@@ -103,13 +108,26 @@ class TagGovernanceApp(tb.Window):
             themename="darkly",
             size=(1200, 800),
         )
-        self.state("zoomed")
         self.resizable(True, True)
-        self.minsize(1200, 768)
+        ancho_pantalla = self.winfo_screenwidth()
+        alto_pantalla = self.winfo_screenheight()
+        self.minsize(min(900, max(640, ancho_pantalla - 80)), min(640, max(480, alto_pantalla - 100)))
         self.app_style = tb.Style()
         self.app_style.configure("RecentExport.TButton", background="#1D6F42", foreground="white")
         self.app_style.map("RecentExport.TButton", background=[("active", "#155634")])
         self.app_style.configure("IsaReading.TLabel", background="#1D6F42", foreground="white")
+        self.app_style.configure("Recent.Treeview", background="#222222", fieldbackground="#222222", foreground="#FFFFFF")
+        self.app_style.map("Recent.Treeview", background=[("selected", "#0D6EFD")], foreground=[("selected", "#FFFFFF")])
+        self.app_style.configure("Expanded.Treeview", background="#222222", fieldbackground="#222222", foreground="#FFFFFF")
+        self.app_style.map("Expanded.Treeview", background=[("selected", "#0D6EFD")], foreground=[("selected", "#FFFFFF")])
+        self.app_style.configure(
+            "PropuestaTag.TLabel", background=AMBAR, foreground=AZUL,
+            font=("Segoe UI", 22, "bold"), anchor="center", padding=(24, 14),
+        )
+        self.app_style.configure(
+            "LecturaTag.TLabel", foreground="#FFFFFF", font=("Segoe UI", 15, "bold"),
+            anchor="center", justify="center", padding=(12, 10),
+        )
         self._aplicar_identidad()
 
         db.init_db()
@@ -163,9 +181,9 @@ class TagGovernanceApp(tb.Window):
         # contenido supera el alto del monitor, la ventana abre a la
         # altura máxima visible y el scroll vertical cubre el resto.
         self.update_idletasks()
-        alto = max(self.winfo_reqheight(), 640)
-        alto = min(alto, self.winfo_screenheight() - 100)
-        self.geometry(f"900x{alto}")
+        ancho = min(1200, max(640, ancho_pantalla - 80))
+        alto = min(820, max(520, alto_pantalla - 100))
+        self.geometry(f"{ancho}x{alto}")
         self.refrescar_paso5()
 
     # ------------------------------------------------------------
@@ -240,7 +258,13 @@ class TagGovernanceApp(tb.Window):
             self._vincular_rueda(hijo)
 
     def _on_mousewheel(self, event):
-        """Desplaza el Canvas principal con la rueda del mouse."""
+        """Desplaza la página salvo dentro de controles con scroll propio."""
+        widget = getattr(event, "widget", None)
+        ruta_widget = str(widget).lower() if widget is not None else ""
+        if "popdown" in ruta_widget:
+            return "break"
+        if isinstance(widget, (ttk.Treeview, tk.Listbox, tk.Text)):
+            return "break"
         if hasattr(self, "canvas"):
             if getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
                 direction = 1
@@ -269,9 +293,8 @@ class TagGovernanceApp(tb.Window):
         if not _PIL_OK or not os.path.isfile(LOGO_APP_ICO):
             return
         try:
-            pil = Image.open(LOGO_APP_ICO).resize(
-                (80, 80), Image.Resampling.LANCZOS
-            )
+            with Image.open(LOGO_APP_ICO) as origen:
+                pil = origen.resize((80, 80), Image.Resampling.LANCZOS)
             self.logo_img = ImageTk.PhotoImage(pil)
             tk.Label(parent, image=self.logo_img, bg="white").pack(
                 side="left", padx=(0, 14)
@@ -294,6 +317,7 @@ class TagGovernanceApp(tb.Window):
 
         bloque_izq = tk.Frame(interior, bg="white")
         bloque_izq.pack(side="left")
+        self.bloque_header_izquierdo = bloque_izq
 
         # --- Logo corporativo (Los Balcanes S.A. / Cía. Azucarera) ---
         self.img_logo_balcanes = None
@@ -325,8 +349,29 @@ class TagGovernanceApp(tb.Window):
         tk.Label(textos, text="Ingenio La Florida — Gestión de Tags ISA-5.1",
                  bg="white", fg=GRIS, font=("Segoe UI", 9)).pack(anchor="w")
 
+        self.lbl_titulo_header = tk.Label(
+            interior,
+            text="Registro de Nuevo Instrumento",
+            bg="white",
+            fg=AZUL,
+            font=("Segoe UI", 20, "bold"),
+            anchor="center",
+            justify="center",
+        )
+        self.lbl_titulo_header.pack(side="left", fill="x", expand=True, padx=(24, 0))
+        interior.bind("<Configure>", self._ajustar_titulo_header)
+
         # Filete ámbar de separación, en el color secundario del logo
         tk.Frame(cabecera, bg=AMBAR, height=3).pack(fill="x", side="bottom")
+
+    def _ajustar_titulo_header(self, event):
+        """Mantiene el título visible sin invadir los logos en anchos reducidos."""
+        disponible = max(180, event.width - self.bloque_header_izquierdo.winfo_reqwidth() - 48)
+        tamanio = 20 if disponible >= 360 else 16 if disponible >= 260 else 13
+        self.lbl_titulo_header.configure(
+            font=("Segoe UI", tamanio, "bold"),
+            wraplength=disponible,
+        )
 
     def _build_ui(self):
         """Fase 3: tres vistas persistentes; solo una se muestra a la vez.
@@ -588,7 +633,9 @@ class TagGovernanceApp(tb.Window):
     # ============================================================
     def _construir_navegacion_fase3(self):
         self._construir_cabecera()
-        self._scrollbar.pack_forget()
+        # El encabezado queda fijo; las vistas se desplazan dentro del canvas
+        # cuando una pantalla pequeña no alcanza a mostrar todo el contenido.
+        self._scrollbar.pack(side="right", fill="y")
         self.vistas = {}
         for nombre in ("inicio", "datos", "busqueda"):
             vista = ttk.Frame(self.contenedor, padding=16)
@@ -610,6 +657,7 @@ class TagGovernanceApp(tb.Window):
         for vista in self.vistas.values():
             vista.pack_forget()
         self.vistas[nombre].pack(fill="both", expand=True)
+        self.canvas.yview_moveto(0)
         if nombre == "inicio":
             self.refrescar_tags_recientes()
         elif nombre == "busqueda":
@@ -619,16 +667,15 @@ class TagGovernanceApp(tb.Window):
         vista = self.vista_inicio
         vista.columnconfigure(0, weight=3)
         vista.columnconfigure(1, weight=2)
-        vista.rowconfigure(1, weight=1)
-        encabezado = ttk.Frame(vista, padding=(8, 4, 8, 16))
-        encabezado.grid(row=0, column=0, columnspan=2, sticky="ew")
-        ttk.Label(encabezado, text="Registro de Nuevo Instrumento", font=("Segoe UI", 20, "bold")).pack(anchor="center")
-        ttk.Label(encabezado, text="Ingenio La Florida - Gestión de Tags ISA-5.1", style="secondary.TLabel", font=("Segoe UI", 10)).pack(anchor="center", pady=(3, 0))
+        vista.rowconfigure(0, weight=1)
         izquierda = ttk.Labelframe(vista, text="Crear Nuevo Tag", padding=14)
         derecha = ttk.Labelframe(vista, text="Búsqueda Rápida", padding=14)
-        izquierda.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
-        derecha.grid(row=1, column=1, sticky="nsew")
+        self.panel_crear = izquierda
+        self.panel_busqueda = derecha
+        izquierda.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        derecha.grid(row=0, column=1, sticky="nsew")
         izquierda.columnconfigure(1, weight=1)
+        vista.bind("<Configure>", self._on_inicio_configure)
 
         ttk.Label(izquierda, text="Área de la planta:").grid(row=0, column=0, sticky="w", pady=5)
         self.cb_area = ttk.Combobox(izquierda, values=list(self.areas), state="readonly")
@@ -642,7 +689,9 @@ class TagGovernanceApp(tb.Window):
         ttk.Button(izquierda, text="💡 Asistente ISA", command=self.abrir_asistente_isa, style="info.Outline.TButton").grid(row=2, column=2, padx=(8, 0), pady=5)
         for cb in (self.cb_area, self.cb_variable, self.cb_funcion):
             self._redirigir_scroll_combobox(cb)
-            cb.bind("<<ComboboxSelected>>", self.verificar_y_consultar)
+        self.cb_area.bind("<<ComboboxSelected>>", self.verificar_y_consultar)
+        self.cb_variable.bind("<<ComboboxSelected>>", self._on_variable_selected)
+        self.cb_funcion.bind("<<ComboboxSelected>>", self._on_funcion_selected)
 
         ttk.Label(izquierda, text="Asignación de lazo:").grid(row=3, column=0, sticky="w", pady=5)
         modo = ttk.Frame(izquierda)
@@ -656,22 +705,51 @@ class TagGovernanceApp(tb.Window):
         self._redirigir_scroll_combobox(self.cb_lazo)
 
         ttk.Label(izquierda, text="Paso 2 — Tags existentes", style="info.TLabel").grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 4))
-        self.lista_existentes = tk.Listbox(izquierda, height=7)
-        self.lista_existentes.grid(row=6, column=0, columnspan=2, sticky="ew")
-        self.lista_existentes.bind("<<ListboxSelect>>", self.on_seleccionar_existente)
+        self.btn_editar_existente = ttk.Button(
+            izquierda, text="Editar tag", command=self._editar_existente_seleccionado,
+            style="primary.Outline.TButton", state="disabled",
+        )
+        self.btn_editar_existente.grid(row=5, column=2, sticky="e", pady=(12, 4))
+        frame_lista = ttk.Frame(izquierda)
+        frame_lista.grid(row=6, column=0, columnspan=3, sticky="ew")
+        frame_lista.columnconfigure(0, weight=1)
+        self.lista_existentes = tk.Listbox(frame_lista, height=7, exportselection=False)
+        self.lista_existentes.grid(row=0, column=0, sticky="ew")
+        self.scroll_lista_existentes = ttk.Scrollbar(
+            frame_lista, orient="vertical", command=self.lista_existentes.yview
+        )
+        self.scroll_lista_existentes.grid(row=0, column=1, sticky="ns")
+        self.lista_existentes.configure(yscrollcommand=self.scroll_lista_existentes.set)
+        self.lista_existentes.bind("<<ListboxSelect>>", self._on_lista_existentes_seleccion)
+        self.lista_existentes.bind("<Double-1>", self._editar_existente_seleccionado)
+        self.lista_existentes.bind("<MouseWheel>", self._on_mousewheel_lista_existentes)
+        self.lista_existentes.bind("<Button-4>", self._on_mousewheel_lista_existentes)
+        self.lista_existentes.bind("<Button-5>", self._on_mousewheel_lista_existentes)
         propuesta = ttk.Frame(izquierda)
-        propuesta.grid(row=7, column=0, columnspan=2, sticky="ew", pady=12)
-        self.lbl_propuesta = ttk.Label(propuesta, text="Tag propuesto: —", style="warning.TLabel", font=("Segoe UI", 16, "bold"), padding=10)
+        propuesta.grid(row=7, column=0, columnspan=3, sticky="ew", pady=12)
+        self.lbl_propuesta = ttk.Label(propuesta, text="Tag propuesto: —", style="PropuestaTag.TLabel")
         self.lbl_propuesta.pack(side="left", fill="x", expand=True)
-        self.btn_copiar = ttk.Button(propuesta, text="📋 Copiar", command=self.on_copiar_propuesta, style="primary.TButton")
+        self.lbl_propuesta.bind("<Double-1>", self._editar_tag_propuesto_manual)
+        self.btn_copiar = ttk.Button(propuesta, text="📋 Copiar", command=self.on_copiar_propuesta, style="primary.TButton", padding=(14, 14))
         self.btn_copiar.pack(side="left", padx=(8, 0))
-        self.entry_tag = ttk.Entry(izquierda)
-        self.entry_tag.grid(row=8, column=0, columnspan=2, sticky="ew")
+        self.btn_editar_tag_manual = ttk.Button(
+            propuesta, text="✎ Editar tag", command=self._editar_tag_propuesto_manual,
+            style="warning.Outline.TButton", padding=(12, 14),
+        )
+        self.btn_editar_tag_manual.pack(side="left", padx=(8, 0))
+        ttk.Label(
+            izquierda,
+            text="Para casos especiales ISA, use “Editar tag” o haga doble clic sobre el recuadro amarillo.",
+            style="secondary.TLabel", anchor="center",
+        ).grid(row=8, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+        # Campo interno conservado por compatibilidad con generación, guardado
+        # y traducción; ya no se muestra como un duplicado gris sin propósito.
+        self.entry_tag = ttk.Entry(izquierda, state="readonly")
         self.entry_tag.bind("<KeyRelease>", self._on_entry_tag_cambio)
-        self.lbl_traduccion = ttk.Label(izquierda, text="", style="secondary.TLabel", wraplength=620)
-        self.lbl_traduccion.grid(row=9, column=0, columnspan=2, sticky="ew", pady=8)
+        self.lbl_traduccion = ttk.Label(izquierda, text="", style="LecturaTag.TLabel", wraplength=620)
+        self.lbl_traduccion.grid(row=9, column=0, columnspan=3, sticky="ew", pady=8)
         acciones = ttk.Frame(izquierda)
-        acciones.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        acciones.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         ttk.Button(acciones, text="Eliminar tag seleccionado", command=self.on_eliminar, style="danger.Outline.TButton").pack(side="left")
         ttk.Button(acciones, text="🔄 Limpiar", command=self.limpiar_formulario, style="secondary.TButton").pack(side="right", padx=(0, 8))
         self.btn_siguiente = ttk.Button(acciones, text="SIGUIENTE →", command=self.ir_a_datos, style="success.TButton", state="disabled")
@@ -689,9 +767,16 @@ class TagGovernanceApp(tb.Window):
         self.entry_busqueda_rapida.bind("<Return>", lambda _e: self.abrir_busqueda_rapida())
         self.entry_busqueda_rapida.bind("<KeyRelease>", self.filtrar_tags_recientes)
         ttk.Button(barra, text="Buscar", command=self.abrir_busqueda_rapida, style="primary.TButton").pack(side="left", padx=(6, 0))
-        self.tree_recientes = ttk.Treeview(derecha, columns=("tag", "estado", "fecha"), show="headings", height=8, selectmode="extended")
-        for col, title, width in (("tag", "Tag", 230), ("estado", "Estado", 115), ("fecha", "Creado", 145)):
-            self.tree_recientes.heading(col, text=title); self.tree_recientes.column(col, width=width, anchor="w")
+        self.tree_recientes = ttk.Treeview(
+            derecha, columns=("tag", "estado", "fecha"), show="headings", height=8,
+            selectmode="extended", style="Recent.Treeview",
+        )
+        for col, title, width, stretch in (
+            ("tag", "Tag", 140, False), ("estado", "Estado", 110, False),
+            ("fecha", "Creado", 170, True),
+        ):
+            self.tree_recientes.heading(col, text=title)
+            self.tree_recientes.column(col, width=width, minwidth=width, stretch=stretch, anchor="w")
         self.tree_recientes.grid(row=2, column=0, sticky="nsew")
         self.tree_recientes.tag_configure("selected", background="#1f538d", foreground="white")
         self.tree_recientes.bind("<<TreeviewSelect>>", self._detalle_reciente)
@@ -703,12 +788,20 @@ class TagGovernanceApp(tb.Window):
         detalle = ttk.Frame(derecha)
         detalle.grid(row=4, column=0, sticky="nsew")
         detalle.columnconfigure(1, weight=1)
-        ttk.Label(detalle, text="Detalle del tag seleccionado", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        cabecera_detalle = ttk.Frame(detalle)
+        cabecera_detalle.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        cabecera_detalle.columnconfigure(0, weight=1)
+        ttk.Label(cabecera_detalle, text="Detalle del tag seleccionado", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, sticky="w")
+        self.btn_editar_detalle = ttk.Button(cabecera_detalle, text="✎ Editar", command=self.editar_tag_detallado, style="primary.TButton", state="disabled", padding=(12, 6))
+        self.btn_editar_detalle.grid(row=0, column=1, sticky="e", padx=(0, 6))
+        self.btn_eliminar_detalle = ttk.Button(cabecera_detalle, text="🗑️ Eliminar", command=self.eliminar_tag_detallado, style="danger.TButton", state="disabled", padding=(12, 6))
+        self.btn_eliminar_detalle.grid(row=0, column=2, sticky="e")
         self.lbl_lectura_reciente = ttk.Label(
             detalle, text="Lectura ISA-5.1: —", style="IsaReading.TLabel",
-            font=("Segoe UI", 16, "bold"), padding=(14, 12), wraplength=450,
+            font=("Segoe UI", 16, "bold"), width=1, padding=(14, 12), wraplength=280,
         )
-        self.lbl_lectura_reciente.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        self.lbl_lectura_reciente.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        detalle.bind("<Configure>", self._ajustar_ancho_lectura_reciente)
         self.detalle_placeholder = ttk.Label(detalle, text="Seleccione un tag de la lista para ver su detalle", style="secondary.TLabel", wraplength=450)
         self.detalle_placeholder.grid(row=2, column=0, columnspan=2, sticky="w", pady=8)
         self.detalle_vars = {clave: tk.StringVar(value="—") for clave in ("tag_completo", "descripcion", "estado", "ubicacion", "fabricante", "modelo", "rango_medicion", "unidad", "tipo_senal", "entrada_salida", "fluido_proceso", "creado_por", "fecha_creacion")}
@@ -716,9 +809,50 @@ class TagGovernanceApp(tb.Window):
         for fila, (clave, titulo) in enumerate(etiquetas, start=3):
             ttk.Label(detalle, text=f"{titulo}:", style="secondary.TLabel").grid(row=fila, column=0, sticky="nw", padx=(0, 8), pady=1)
             ttk.Label(detalle, textvariable=self.detalle_vars[clave], wraplength=360).grid(row=fila, column=1, sticky="nw", pady=1)
-        self.btn_editar_detalle = ttk.Button(detalle, text="Editar", command=self.editar_tag_detallado, style="primary.TButton", state="disabled")
-        self.btn_editar_detalle.grid(row=len(etiquetas) + 3, column=1, sticky="e", pady=(10, 0))
         ttk.Button(derecha, text="EXPANDIR BÚSQUEDA", command=lambda: self.mostrar_vista("busqueda"), style="info.TButton").grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        self._adaptar_layout_inicio(vista.winfo_width())
+
+    def _on_inicio_configure(self, event):
+        self._adaptar_layout_inicio(event.width)
+        self.lbl_traduccion.configure(wraplength=max(320, event.width - 100))
+
+    def _adaptar_layout_inicio(self, ancho):
+        """Alterna entre dos columnas y paneles apilados según el ancho útil."""
+        compacto = ancho < 1050
+        if compacto:
+            self.panel_crear.grid_configure(row=0, column=0, columnspan=2, padx=0, pady=(0, 10))
+            self.panel_busqueda.grid_configure(row=1, column=0, columnspan=2, padx=0)
+            self.vista_inicio.rowconfigure(0, weight=0)
+            self.vista_inicio.rowconfigure(1, weight=1)
+        else:
+            self.panel_crear.grid_configure(row=0, column=0, columnspan=1, padx=(0, 10), pady=0)
+            self.panel_busqueda.grid_configure(row=0, column=1, columnspan=1, padx=0)
+            self.vista_inicio.rowconfigure(0, weight=1)
+            self.vista_inicio.rowconfigure(1, weight=0)
+
+    def _ajustar_ancho_lectura_reciente(self, event):
+        """Mantiene la lectura ISA dentro del ancho ya asignado al panel."""
+        self.lbl_lectura_reciente.configure(wraplength=max(280, event.width - 28))
+
+    def _on_mousewheel_lista_existentes(self, event):
+        """La rueda sobre Paso 2 desplaza solo la lista, nunca el canvas padre."""
+        if getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
+            direccion = 1
+        else:
+            direccion = -1
+        self.lista_existentes.yview_scroll(direccion, "units")
+        return "break"
+
+    def _on_lista_existentes_seleccion(self, _event=None):
+        """Selecciona para navegar; la edición requiere doble clic o botón."""
+        seleccion = self.lista_existentes.curselection()
+        es_tag = bool(seleccion) and not self.lista_existentes.get(seleccion[0]).startswith("(")
+        self.btn_editar_existente.config(state="normal" if es_tag else "disabled")
+
+    def _editar_existente_seleccionado(self, _event=None):
+        """Entrada explícita al flujo de edición existente."""
+        if self.lista_existentes.curselection():
+            self.on_seleccionar_existente()
 
     def limpiar_formulario(self):
         """Resetea el Paso 1, su propuesta y el detalle de tags recientes."""
@@ -733,8 +867,9 @@ class TagGovernanceApp(tb.Window):
         self.tag_propuesto = None
         self.numero_propuesto = None
         self._set_entry_tag("")
-        self.lbl_propuesta.config(text="Tag propuesto: —", style="warning.TLabel")
+        self.lbl_propuesta.config(text="Tag propuesto: —", style="PropuestaTag.TLabel")
         self.lista_existentes.delete(0, tk.END)
+        self.btn_editar_existente.config(state="disabled")
         self.lbl_traduccion.config(text="")
         self.btn_siguiente.config(state="disabled")
         self.tree_recientes.selection_remove(self.tree_recientes.selection())
@@ -747,6 +882,7 @@ class TagGovernanceApp(tb.Window):
         self.lbl_lectura_reciente.config(text="Lectura ISA-5.1: —")
         self.detalle_placeholder.grid()
         self.btn_editar_detalle.config(state="disabled")
+        self.btn_eliminar_detalle.config(state="disabled")
         self.btn_exportar_recientes.config(state="disabled")
         self.status.config(text="Formulario de creación reiniciado.")
 
@@ -775,7 +911,7 @@ class TagGovernanceApp(tb.Window):
         self.cb_fluido = ttk.Combobox(vista, values=["Alcohol 90°", "Alcohol 96°", "Agua pura", "Vapor"]); self.cb_fluido.grid(row=7, column=3, sticky="ew", pady=6)
         self.cb_datatype = ttk.Combobox(vista, values=["BOOL", "REAL", "INT", "DINT", "STRING"])
         botones = ttk.Frame(vista); botones.grid(row=8, column=0, columnspan=4, sticky="ew", pady=24)
-        ttk.Button(botones, text="← ATRÁS", command=lambda: self.mostrar_vista("inicio"), style="secondary.TButton").pack(side="left")
+        ttk.Button(botones, text="← ATRÁS", command=self._volver_a_inicio_desde_datos, style="secondary.TButton").pack(side="left")
         self.btn_accion = ttk.Button(botones, text="GUARDAR TAG", command=self.on_guardar, style="success.TButton")
         self.btn_accion.pack(side="right")
 
@@ -789,10 +925,19 @@ class TagGovernanceApp(tb.Window):
         self.entry_buscar = ttk.Entry(buscar); self.entry_buscar.grid(row=0, column=0, sticky="ew", pady=(0,8)); self.entry_buscar.bind("<KeyRelease>", self._on_buscar_cambio)
         self.lbl_resultado_busqueda = ttk.Label(buscar, text="", style="secondary.TLabel"); self.lbl_resultado_busqueda.grid(row=0, column=1, padx=(10,0))
         columnas=("tag","estado","tipo_senal","io","fluido","fecha","descripcion")
-        self.tree_tags=ttk.Treeview(buscar, columns=columnas, show="headings", selectmode="extended")
+        self.tree_tags = ttk.Treeview(
+            buscar, columns=columnas, show="headings", selectmode="extended",
+            style="Expanded.Treeview",
+        )
         for col,title,width in (("tag","Tag",150),("estado","Estado",110),("tipo_senal","Tipo de Señal",110),("io","Entrada/Salida",120),("fluido","Fluido/Product",130),("fecha","Fecha/Hora creación",150),("descripcion","Descripción/Alias",350)):
             self.tree_tags.heading(col,text=title); self.tree_tags.column(col,width=width,anchor="w")
-        self.tree_tags.grid(row=1,column=0,columnspan=2,sticky="nsew"); self.tree_tags.bind("<Double-1>", self._on_grilla_doble_click); self.tree_tags.tag_configure("retirado", foreground=ROJO_PELIGRO)
+        self.tree_tags.grid(row=1,column=0,columnspan=2,sticky="nsew")
+        self.tree_tags.bind("<<TreeviewSelect>>", self._actualizar_contador_seleccion_expandida)
+        self.tree_tags.bind("<Shift-Up>", lambda _event: self._extender_seleccion_expandida("up"))
+        self.tree_tags.bind("<Shift-Down>", lambda _event: self._extender_seleccion_expandida("down"))
+        self.tree_tags.bind("<Control-a>", self._seleccionar_todos_expandida)
+        self.tree_tags.bind("<Double-1>", self._on_grilla_doble_click)
+        self.tree_tags.tag_configure("retirado", foreground=ROJO_PELIGRO)
 
     def abrir_asistente_isa(self):
         """Asistente de decisiones para elegir la función ISA del instrumento."""
@@ -814,6 +959,82 @@ class TagGovernanceApp(tb.Window):
              ("Controlador", lambda: self.seleccionar_funcion_isa("C"))),
         )
 
+    def _on_variable_selected(self, event=None):
+        """Aplica las restricciones corporativas apenas se define el proceso."""
+        variable = self.variables.get(self.cb_variable.get())
+        if variable is None:
+            return
+        permitidas = funciones_permitidas_para_variable(
+            variable["letra"], (fila["letra"] for fila in self.funciones.values())
+        )
+        self.cb_funcion["values"] = [
+            texto for texto, fila in self.funciones.items()
+            if fila["letra"] in permitidas
+        ]
+        seleccion = self.funciones.get(self.cb_funcion.get())
+        if seleccion and seleccion["letra"] not in permitidas:
+            self.cb_funcion.set("")
+            self._limpiar_propuesta_lazo("Tag propuesto: seleccione una función permitida")
+            self.status.config(text=f"ISA: se bloquearon funciones no aplicables a {variable['nombre']}.")
+        self.verificar_y_consultar()
+
+    def _on_funcion_selected(self, event=None):
+        """Fuerza la decisión ISA cuando la condición física define el tag."""
+        funcion = self.funciones.get(self.cb_funcion.get())
+        if funcion is None:
+            return
+        codigo = funcion["letra"]
+        valido, mensaje = validar_funcion_isa(codigo)
+        if not valido:
+            messagebox.showerror("Orden ISA inválido", mensaje, parent=self)
+            self.cb_funcion.set("")
+            self._limpiar_propuesta_lazo("Tag propuesto: —")
+            return
+        if codigo in {"T", "I"}:
+            self._abrir_decision_isa_obligatoria(codigo)
+            return
+        self.verificar_y_consultar()
+
+    def _abrir_decision_isa_obligatoria(self, codigo):
+        """Pregunta obligatoria para distinguir LT/LIT y LI/LG sin adivinar."""
+        ventana = tk.Toplevel(self)
+        ventana.title("Asistente ISA obligatorio")
+        ventana.geometry("560x250")
+        ventana.transient(self)
+        ventana.grab_set()
+        self.ventana_decision_isa = ventana
+        cuerpo = ttk.Frame(ventana, padding=24)
+        cuerpo.pack(fill="both", expand=True)
+        if codigo == "T":
+            pregunta = "¿El transmisor físico en campo tiene pantalla o display indicador local?"
+            ayuda = "Sí → I antes de T: LIT / PIT / FIT. No → LT / PT / FT."
+            si = lambda: self._resolver_decision_isa("T", tiene_display=True)
+            no = lambda: self._resolver_decision_isa("T", tiene_display=False)
+        else:
+            pregunta = "¿Es un dispositivo autónomo de visualización directa (vidrio, mirilla o manómetro)?"
+            ayuda = "Sí → G (LG / PG / TG). No → I, indicador digital local."
+            si = lambda: self._resolver_decision_isa("I", visor_directo=True)
+            no = lambda: self._resolver_decision_isa("I", visor_directo=False)
+        ttk.Label(cuerpo, text="DECISIÓN REQUERIDA POR ISA-5.1", style="warning.TLabel", font=("Segoe UI", 11, "bold")).pack(pady=(0, 12))
+        ttk.Label(cuerpo, text=pregunta, font=("Segoe UI", 13, "bold"), wraplength=500).pack(pady=(0, 8))
+        ttk.Label(cuerpo, text=ayuda, style="secondary.TLabel", wraplength=500).pack(pady=(0, 16))
+        botones = ttk.Frame(cuerpo)
+        botones.pack()
+        ttk.Button(botones, text="Sí", command=si, style="success.TButton", width=16).pack(side="left", padx=6)
+        ttk.Button(botones, text="No", command=no, style="primary.TButton", width=16).pack(side="left", padx=6)
+        ventana.protocol("WM_DELETE_WINDOW", self._cancelar_decision_isa)
+
+    def _resolver_decision_isa(self, codigo, tiene_display=None, visor_directo=None):
+        sugerida = funcion_sugerida_por_asistente(codigo, tiene_display, visor_directo)
+        self.seleccionar_funcion_isa(sugerida)
+        self.status.config(text=f"Asistente ISA obligatorio: función '{sugerida}' confirmada.")
+
+    def _cancelar_decision_isa(self):
+        """Sin respuesta no hay selección; el asistente no es opcional."""
+        self.cb_funcion.set("")
+        self.ventana_decision_isa.destroy()
+        self._limpiar_propuesta_lazo("Tag propuesto: responda la decisión ISA para continuar")
+
     def _pregunta_asistente_isa(self, pregunta, opciones):
         for hijo in self.asistente_isa_cuerpo.winfo_children():
             hijo.destroy()
@@ -825,18 +1046,47 @@ class TagGovernanceApp(tb.Window):
     def seleccionar_funcion_isa(self, codigo):
         clave = next((texto for texto in self.funciones if texto.startswith(codigo + " - ")), None)
         if clave is None:
-            messagebox.showwarning("Función no disponible", f"La función ISA '{codigo}' no está disponible en el catálogo.", parent=self.ventana_asistente_isa)
+            padre = getattr(self, "ventana_decision_isa", self)
+            messagebox.showwarning("Función no disponible", f"La función ISA '{codigo}' no está disponible en el catálogo.", parent=padre)
             return
         self.cb_funcion.set(clave)
-        self.ventana_asistente_isa.destroy()
+        for atributo in ("ventana_asistente_isa", "ventana_decision_isa"):
+            ventana = getattr(self, atributo, None)
+            if ventana is not None and ventana.winfo_exists():
+                ventana.destroy()
         self.verificar_y_consultar()
         self.status.config(text=f"Asistente ISA: función '{codigo}' seleccionada.")
 
     def ir_a_datos(self):
         if not self.tag_propuesto:
             return
+        # El alta nunca hereda valores que hayan sido cargados en una edición.
+        if not self.tag_en_edicion:
+            self._resetear_campos_datos_creacion()
+            self.entry_descripcion.insert(
+                0, traducir_tag_humano(self.tag_propuesto, DICCIONARIOS).capitalize()
+            )
         self.lbl_tag_datos.config(text=f"Tag propuesto: {self.tag_propuesto}")
         self.mostrar_vista("datos")
+
+    def _resetear_campos_datos_creacion(self):
+        """Devuelve todos los controles de Datos a valores seguros de alta."""
+        for entry in self.entries.values():
+            entry.delete(0, tk.END)
+        self.cb_usuario.set("")
+        self.cb_estado.set("Planificado")
+        self.cb_datatype.set("")
+        self.cb_tipo_senal.set("Desconocido")
+        self.cb_io.set("N/D")
+        self.cb_fluido.set("")
+
+    def _volver_a_inicio_desde_datos(self):
+        """Sale de edición sin contaminar el próximo flujo de creación."""
+        if self.tag_en_edicion:
+            self._salir_modo_edicion()
+            self._resetear_campos_datos_creacion()
+            self.actualizar_propuesta()
+        self.mostrar_vista("inicio")
 
     def _obtener_tags_recientes(self, texto=""):
         """Consulta toda la base y devuelve hasta diez coincidencias recientes."""
@@ -884,13 +1134,49 @@ class TagGovernanceApp(tb.Window):
             self.mostrar_detalle_tag(self.tag_seleccionado_actual)
 
     def exportar_seleccionados_recientes(self):
+        """Exporta exclusivamente la selección del Treeview de recientes."""
+        from openpyxl import Workbook
+
         tags = self.tree_recientes.selection()
         if not tags:
             messagebox.showwarning("Exportación", "Seleccione al menos un tag para exportar.")
             return
-        self.refrescar_paso5()
-        self.tree_tags.selection_set(tags)
-        self.on_exportar_excel()
+
+        conn = db.get_connection()
+        try:
+            placeholders = ",".join("?" * len(tags))
+            cursor = conn.execute(
+                f"""
+                SELECT t.*, a.codigo AS area_codigo, a.nombre AS area_nombre
+                FROM tags t JOIN areas a ON t.area_id = a.id
+                WHERE t.tag_completo IN ({placeholders})
+                """,
+                list(tags),
+            )
+            columnas = [descripcion[0] for descripcion in cursor.description]
+            filas = cursor.fetchall()
+        finally:
+            conn.close()
+
+        columna_studio = "Tag_Studio5000"
+        indice_tag = columnas.index("tag_completo")
+        columnas.insert(indice_tag + 1, columna_studio)
+        carpeta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports")
+        os.makedirs(carpeta, exist_ok=True)
+        ruta = os.path.join(carpeta, f"tags_recientes_{time.strftime('%Y%m%d_%H%M%S')}.xlsx")
+
+        libro = Workbook()
+        hoja = libro.active
+        hoja.append(columnas)
+        for fila in filas:
+            valores = [fila[columna] for columna in columnas if columna != columna_studio]
+            valores.insert(indice_tag + 1, generar_tag_plc(fila["tag_completo"]))
+            hoja.append(valores)
+        libro.save(ruta)
+        messagebox.showinfo(
+            "Exportación completada",
+            f"{len(filas)} tags exportados correctamente.\n\nArchivo: {ruta}",
+        )
 
     def mostrar_detalle_tag(self, tag_codigo):
         """Actualiza el detalle integrado del Inicio; nunca abre una ventana."""
@@ -905,10 +1191,36 @@ class TagGovernanceApp(tb.Window):
             variable.set(fila[clave] or "—")
         self.detalle_placeholder.grid_remove()
         self.btn_editar_detalle.config(state="normal")
+        self.btn_eliminar_detalle.config(state="normal")
 
     def editar_tag_detallado(self):
         if getattr(self, "tag_detallado", None) is not None:
             self._abrir_edicion(self.tag_detallado)
+
+    def eliminar_tag_detallado(self):
+        """Elimina el tag visible en el panel derecho tras confirmación."""
+        fila = getattr(self, "tag_detallado", None)
+        if fila is None:
+            return
+        tag_codigo = fila["tag_completo"]
+        if not messagebox.askyesno("Confirmar eliminación", f"¿Estás seguro de eliminar el tag {tag_codigo}?", parent=self):
+            return
+        try:
+            db.eliminar_tag(tag_codigo)
+        except ValueError as error:
+            messagebox.showerror("No se pudo eliminar", str(error), parent=self)
+            return
+        self.refrescar_tags_recientes(self.entry_busqueda_rapida.get())
+        self.refrescar_paso5()
+        self.tag_seleccionado_actual = None
+        self.tag_detallado = None
+        for variable in self.detalle_vars.values():
+            variable.set("—")
+        self.lbl_lectura_reciente.config(text="Lectura ISA-5.1: —")
+        self.detalle_placeholder.grid()
+        self.btn_editar_detalle.config(state="disabled")
+        self.btn_eliminar_detalle.config(state="disabled")
+        self.status.config(text=f"Tag '{tag_codigo}' eliminado desde búsqueda rápida.")
 
     def _abrir_edicion(self, fila):
         self._entrar_modo_edicion(fila); self.lbl_tag_datos.config(text=f"Editando: {fila['tag_completo']}"); self.mostrar_vista("datos")
@@ -1015,7 +1327,7 @@ class TagGovernanceApp(tb.Window):
                 f["fluido_proceso"] or "", f["fecha_creacion"] or "",
                 f["descripcion"] or "",
             ), tags=tags_fila)
-        self.lbl_resultado_busqueda.config(text=f"{len(filas)} tag(s) en total")
+        self._actualizar_contador_seleccion_expandida(total=len(filas), en_total=True)
 
     def _recargar_app(self):
         db.init_db()
@@ -1044,7 +1356,7 @@ class TagGovernanceApp(tb.Window):
         for e in self.entries.values():
             e.delete(0, tk.END)
         self._set_entry_tag("")
-        self.lbl_propuesta.config(text="Tag propuesto: —", style="warning.TLabel")
+        self.lbl_propuesta.config(text="Tag propuesto: —", style="PropuestaTag.TLabel")
         self._actualizar_traduccion()
         self.lista_existentes.delete(0, tk.END)
         self.entry_buscar.delete(0, tk.END)
@@ -1081,9 +1393,52 @@ class TagGovernanceApp(tb.Window):
             else:
                 self.tree_tags.detach(item)
         total = len(self.tree_tags.get_children())
+        self._actualizar_contador_seleccion_expandida(total=total, en_total=not bool(texto))
+
+    def _actualizar_contador_seleccion_expandida(self, _event=None, total=None, en_total=False):
+        """Muestra el total visible y la selección nativa de la grilla expandida."""
+        if total is None:
+            total = len(self.tree_tags.get_children())
+        seleccionados = len(self.tree_tags.selection())
+        if seleccionados == 1:
+            self._ancla_seleccion_expandida = self.tree_tags.focus()
+        sufijo = " en total" if en_total else ""
         self.lbl_resultado_busqueda.config(
-            text=f"{total} tag(s)" if texto else f"{total} tag(s) en total"
+            text=f"{total} tag(s){sufijo} · {seleccionados} seleccionados"
         )
+
+    def _extender_seleccion_expandida(self, direccion):
+        """Extiende la selección visible de la grilla con Shift+Flecha."""
+        items = self.tree_tags.get_children()
+        seleccion = self.tree_tags.selection()
+        if not items or not seleccion:
+            return "break"
+        ancla = getattr(self, "_ancla_seleccion_expandida", None)
+        if ancla not in items:
+            ancla = self.tree_tags.focus() if self.tree_tags.focus() in items else seleccion[0]
+            self._ancla_seleccion_expandida = ancla
+        foco = self.tree_tags.focus() if self.tree_tags.focus() in items else seleccion[-1]
+        indice = items.index(foco) + (1 if direccion == "down" else -1)
+        if not 0 <= indice < len(items):
+            return "break"
+        destino = items[indice]
+        inicio, fin = sorted((items.index(ancla), indice))
+        self.tree_tags.selection_set(items[inicio:fin + 1])
+        self.tree_tags.focus(destino)
+        self.tree_tags.see(destino)
+        self._actualizar_contador_seleccion_expandida()
+        return "break"
+
+    def _seleccionar_todos_expandida(self, _event=None):
+        """Selecciona todas las filas actualmente visibles con Ctrl+A."""
+        items = self.tree_tags.get_children()
+        if items:
+            self._ancla_seleccion_expandida = items[0]
+            self.tree_tags.selection_set(items)
+            self.tree_tags.focus(items[-1])
+            self.tree_tags.see(items[-1])
+        self._actualizar_contador_seleccion_expandida()
+        return "break"
 
     def _on_grilla_doble_click(self, event=None):
         """Abre el detalle de un tag sin abandonar la búsqueda expandida."""
@@ -1103,9 +1458,49 @@ class TagGovernanceApp(tb.Window):
             self.actualizar_propuesta()
 
     def _set_entry_tag(self, texto):
-        """Puebla el campo editable del tag (borra y reinserta)."""
+        """Puebla el tag generado por el sistema sin habilitar su edición manual."""
+        estado = str(self.entry_tag.cget("state"))
+        if estado == "readonly":
+            self.entry_tag.config(state="normal")
         self.entry_tag.delete(0, tk.END)
         self.entry_tag.insert(0, texto)
+        if estado == "readonly":
+            self.entry_tag.config(state="readonly")
+
+    def _editar_tag_propuesto_manual(self, _event=None):
+        """Permite una excepción explícita sin duplicar el tag en la pantalla."""
+        actual = self.entry_tag.get().strip() or (self.tag_propuesto or "")
+        if not actual:
+            messagebox.showwarning(
+                "Sin tag propuesto",
+                "Primero seleccione Área, Variable y Función para generar un tag.",
+                parent=self,
+            )
+            return
+        nuevo = simpledialog.askstring(
+            "Editar tag manualmente",
+            "Caso especial ISA — ingrese el tag completo\n(Formato: AREA_VARIABLE+FUNCIÓN_LAZO):",
+            initialvalue=actual,
+            parent=self,
+        )
+        if nuevo is None:
+            return
+        nuevo = nuevo.strip().upper()
+        partes = nuevo.split("_")
+        if len(partes) != 3 or not partes[0] or not partes[1] or not partes[2].isdigit():
+            messagebox.showerror(
+                "Formato de tag inválido",
+                "Use el formato AREA_VARIABLE+FUNCIÓN_LAZO, por ejemplo 200_LIT_036.",
+                parent=self,
+            )
+            return
+        self.tag_propuesto = nuevo
+        self.numero_propuesto = int(partes[2])
+        self._set_entry_tag(nuevo)
+        self.lbl_propuesta.config(text=f"Tag propuesto: {nuevo}", style="PropuestaTag.TLabel")
+        self.btn_siguiente.config(state="normal")
+        self._actualizar_traduccion()
+        self.status.config(text=f"Tag ajustado manualmente a '{nuevo}'. Revíselo antes de guardar.")
 
     def _actualizar_traduccion(self):
         tag = self.entry_tag.get().strip() or (self.tag_propuesto or "")
@@ -1137,7 +1532,7 @@ class TagGovernanceApp(tb.Window):
         self.tag_propuesto = None
         self.numero_propuesto = None
         self._set_entry_tag("")
-        self.lbl_propuesta.config(text=mensaje, style="warning.TLabel")
+        self.lbl_propuesta.config(text=mensaje, style="PropuestaTag.TLabel")
         if hasattr(self, "btn_siguiente"):
             self.btn_siguiente.config(state="disabled")
         self._actualizar_traduccion()
@@ -1175,7 +1570,7 @@ class TagGovernanceApp(tb.Window):
         self.tag_propuesto = tag_propuesto
         self.numero_propuesto = numero
         self._set_entry_tag(tag_propuesto)
-        self.lbl_propuesta.config(text=f"Tag propuesto: {tag_propuesto}", style="warning.TLabel")
+        self.lbl_propuesta.config(text=f"Tag propuesto: {tag_propuesto}", style="PropuestaTag.TLabel")
         if hasattr(self, "btn_siguiente"):
             self.btn_siguiente.config(state="normal")
         self.status.config(text=f"Tag propuesto: '{tag_propuesto}' (todavía no guardado).")
@@ -1191,6 +1586,7 @@ class TagGovernanceApp(tb.Window):
         para la combinacion Area+Variable+Funcion dada."""
         existentes = db.obtener_tags_existentes(area_id, variable_id, funcion_id)
         self.lista_existentes.delete(0, tk.END)
+        self.btn_editar_existente.config(state="disabled")
         for t in existentes:
             self.lista_existentes.insert(
                 tk.END, f"{t['tag_completo']}  —  {t['estado']}  —  {t['descripcion'] or ''}"
@@ -1200,6 +1596,7 @@ class TagGovernanceApp(tb.Window):
         """Muestra todos los instrumentos que ya integran el lazo elegido."""
         existentes = db.obtener_instrumentos_lazo(area_id, variable_id, numero_loop)
         self.lista_existentes.delete(0, tk.END)
+        self.btn_editar_existente.config(state="disabled")
         for t in existentes:
             self.lista_existentes.insert(
                 tk.END, f"{t['tag_completo']}  —  {t['estado']}  —  {t['descripcion'] or ''}"
@@ -1293,7 +1690,7 @@ class TagGovernanceApp(tb.Window):
         # todavia no completo Area+Variable+Funcion, actualizar_propuesta()
         # no se va a disparar despues de esto, asi que hay que resetear
         # el chip aca tambien para no dejarlo con el celeste de edicion.
-        self.lbl_propuesta.config(text="Tag propuesto: —", style="warning.TLabel")
+        self.lbl_propuesta.config(text="Tag propuesto: —", style="PropuestaTag.TLabel")
         self._set_entry_tag("")
         self._actualizar_traduccion()
 
@@ -1417,7 +1814,13 @@ class TagGovernanceApp(tb.Window):
             )
             return
 
-        tag_a_guardar = self.entry_tag.get().strip() or self.tag_propuesto
+        # La identidad se genera desde catálogos y respuestas ISA; no se toma
+        # texto libre para impedir invertir letras o crear combinaciones ajenas.
+        tag_a_guardar = self.tag_propuesto
+        valido, mensaje = validar_funcion_isa(funcion["letra"])
+        if not valido:
+            messagebox.showerror("Orden ISA inválido", mensaje)
+            return
         try:
             numero_a_guardar = int(tag_a_guardar.rsplit("_", 1)[-1])
         except (ValueError, IndexError):
@@ -1471,7 +1874,7 @@ class TagGovernanceApp(tb.Window):
         self.cb_tipo_senal.set("Desconocido")
         self.cb_io.set("N/D")
         self.cb_fluido.set("")
-        self.lbl_propuesta.config(text="Tag propuesto: —", style="warning.TLabel")
+        self.lbl_propuesta.config(text="Tag propuesto: —", style="PropuestaTag.TLabel")
 
         # Refresca el Listbox, la búsqueda expandida y la lista de recientes.
         self.actualizar_propuesta()

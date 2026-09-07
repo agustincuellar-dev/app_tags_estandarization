@@ -149,6 +149,7 @@ def _cargar_funciones_isa_estandar(conn):
         ("E",   "Elemento Primario / Sensor"),            # Tabla 1, fila E
         ("Y",   "Convertidor / Relé / I-P"),              # Nota 23/24: dispositivos auxiliares
         ("C",   "Controlador"),
+        ("IT",  "Indicador - Transmisor (display local)"),
         ("Q",   "Totalizador / Integrador"),              # Tabla 1, fila Q, col 3/4
         ("A",   "Alarma"),                                # Tabla 1, fila A, col 3
         ("AH",  "Alarma de Alta"),
