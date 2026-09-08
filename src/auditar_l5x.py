@@ -1319,6 +1319,404 @@ def heredar_area_por_scope(nombre_tag, tag_a_programa, programa_area, rutina_inf
     return None, None, None
 
 
+def parsear_topologia_l5x(path_l5x):
+    """Phase 1. Preserve program/routine/sheet and declaration identities.
+
+    AOI definitions are retained as metadata, never executed as plant loops.
+    Only FBD calls inside controller programs are considered executable here.
+    """
+    from pathlib import Path
+    root = ET.parse(path_l5x).getroot()
+    controller = root.find('Controller')
+    if controller is None:
+        raise ValueError('L5X sin Controller')
+    plc = controller.get('Name', '')
+    tags, hojas = {}, []
+    def declarations(owner, scope):
+        for el in owner.findall('Tags/Tag'):
+            key = (scope, el.get('Name', ''))
+            if key in tags:
+                raise ValueError('Declaracion duplicada: ' + str(key))
+            tags[key] = dict(el.attrib, scope=scope,
+                             descripcion=(el.findtext('Description') or '').strip())
+    declarations(controller, '')
+    for program in controller.findall('Programs/Program'):
+        pname = program.get('Name', '')
+        declarations(program, pname)
+        for routine in program.findall('Routines/Routine'):
+            for sheet in routine.findall('FBDContent/Sheet'):
+                scope = (plc, pname, routine.get('Name', ''), sheet.get('Number', ''))
+                nodes = {}
+                for node in sheet:
+                    if node.tag in ('IRef', 'ORef', 'Block', 'AddOnInstruction'):
+                        if node.get('ID') in nodes:
+                            raise ValueError('ID duplicado en hoja: ' + str(scope))
+                        nodes[node.get('ID')] = dict(node.attrib, kind=node.tag)
+                hojas.append({'scope': scope, 'nodos': nodes,
+                              'wires': [dict(w.attrib) for w in sheet.findall('Wire')]})
+    if len({h['scope'] for h in hojas}) != len(hojas):
+        raise ValueError('Scope de hoja duplicado')
+    definitions = {d.get('Name'): {p.get('Name'): dict(p.attrib)
+                   for p in d.findall('Parameters/Parameter')}
+                   for d in controller.findall('AddOnInstructionDefinitions/AddOnInstructionDefinition')}
+    return {'plc': plc, 'archivo': str(Path(path_l5x)), 'tags': tags,
+            'hojas': hojas, 'aoi_definiciones': definitions}
+
+
+# Audited signal-preserving pin maps only. Arithmetic/selectors are NOT transparent.
+_PIN_MAPAS = {'SCL': ('In', 'Out'), 'LPF': ('In', 'Out')}
+_CONTROL_PINES = {'CONTROL_NIVEL': ('PV', ('MV',)), 'PIDE': ('PV', ('CVEU',)),
+                  'PID': ('PV', ('CV',))}
+
+
+def _identidad(top, program, operand):
+    """Resolve declaration scope without collapsing program-local names."""
+    if operand.startswith('Program:') and '.' in operand:
+        scope, operand = operand[8:].split('.', 1)
+    else:
+        base = re.split(r'[.\[]', operand)[0]
+        scope = program if (program, base) in top['tags'] else ''
+    return scope, operand
+
+
+def _declaracion(top, identity):
+    scope, op = identity
+    return top['tags'].get((scope, re.split(r'[.\[]', op)[0]), {})
+
+
+def _evidencia_pv(operand):
+    tokens = re.split(r'[_\-.]', operand.upper())
+    if set(tokens) & (TOKENS_TAG_DERIVADO | {'TOTALIZADOR', 'SP', 'RAW', 'ACUMULADOR'}):
+        return None, None
+    codes = set()
+    for token in tokens:
+        match = RE_ISA_PEGADO.fullmatch(token)
+        code = match.group(1) if match else token
+        if code in ISA_VALIDOS and code[1:] in ('T', 'IT'):
+            codes.add(code)
+    if len(codes) == 1:
+        code = codes.pop()
+        return code[0], code[1:]
+    return None, None
+
+
+def extraer_lazos_control(topologia, area_defecto=None):
+    """Phase 2. Trace PV upstream and MV/CVEU downstream, fail closed.
+
+    No AOI body instantiation, name similarity, selector or arithmetic inference.
+    Unknown pins, cascade, motor, multiple drivers/endpoints and reused members
+    keep the group visible for revision, with no proposed names.
+    """
+    top = topologia
+    loops = []
+    for h in top['hojas']:
+        nodes, wires = h['nodos'], h['wires']
+        program = h['scope'][1]
+        for nid, ctrl in nodes.items():
+            typ = ctrl.get('Type', ctrl.get('Name', '')).upper()
+            if typ not in _CONTROL_PINES:
+                continue
+            name = ctrl.get('Operand', '')
+            group = {'id': h['scope'] + (nid,), 'controlador': name,
+                     'plc': top['plc'], 'miembros': {}, 'funciones': {},
+                     'variable': None, 'area': None, 'problemas': [],
+                     'protegido': False, 'propuestas': {}}
+            def add(op):
+                if op and not _RE_LITERAL.fullmatch(op):
+                    group['miembros'][op] = _identidad(top, program, op)
+            add(name)
+            pvpin, outpins = _CONTROL_PINES[typ]
+            if ctrl['kind'] == 'AddOnInstruction':
+                params = top['aoi_definiciones'].get(ctrl.get('Name'), {})
+                if (params.get(pvpin, {}).get('Usage') != 'Input' or
+                    any(params.get(p, {}).get('Usage') != 'Output' for p in outpins)):
+                    group['problemas'].append('Definicion AOI/pines no verificados')
+            def trace(node_id, pin, upstream, seen):
+                marker = (node_id, pin, upstream)
+                if marker in seen:
+                    group['problemas'].append('Ciclo de señal')
+                    return []
+                seen = seen | {marker}
+                edges = [w for w in wires if
+                         (w.get('ToID') == node_id and w.get('ToParam', '') == pin
+                          if upstream else
+                          w.get('FromID') == node_id and w.get('FromParam', '') == pin)]
+                if len(edges) != 1:
+                    group['problemas'].append('Señal ausente/ambigua: ' + pin)
+                result = []
+                for w in edges:
+                    other = w.get('FromID' if upstream else 'ToID')
+                    node = nodes.get(other, {})
+                    op = node.get('Operand', '')
+                    add(op)
+                    otherpin = w.get('FromParam' if upstream else 'ToParam', '')
+                    if node.get('kind') == ('IRef' if upstream else 'ORef') and not otherpin:
+                        if not op or _RE_LITERAL.fullmatch(op):
+                            group['problemas'].append('Extremo literal/no identificado')
+                        else:
+                            result.append(op)
+                        continue
+                    mapping = _PIN_MAPAS.get(node.get('Type', '').upper())
+                    if mapping and otherpin == mapping[1 if upstream else 0]:
+                        result += trace(other, mapping[0 if upstream else 1], upstream, seen)
+                    else:
+                        group['problemas'].append('Bloque/pin no transparente o cascada: ' + op)
+                return result
+            pvs = trace(nid, pvpin, True, set())
+            active_outputs = [p for p in outpins if any(w.get('FromID') == nid and w.get('FromParam') == p for w in wires)]
+            mvs = []
+            for p in active_outputs:
+                mvs += trace(nid, p, False, set())
+            if len(pvs) != 1 or len(mvs) != 1:
+                group['problemas'].append('PV/MV no unívocos')
+            if len(pvs) == 1:
+                var, function = _evidencia_pv(pvs[0])
+                group['variable'] = var
+                if var:
+                    group['funciones'][pvs[0]] = function
+                else:
+                    group['problemas'].append('Variable PV sin evidencia explícita de transmisor')
+            for mv in mvs:
+                decl = _declaracion(top, group['miembros'][mv])
+                evidence = mv.upper() + '_' + decl.get('DataType', '').upper()
+                if re.search(r'(MOTOR|BBA|BOMBA|VDF|VFD|DRIVE|VELOCIDAD)', evidence):
+                    group['problemas'].append('Actuador motor/equipo: ' + mv)
+                elif not (re.search(r'(?:^|_)(?:VALVULA|VALVE)(?:_|$)', evidence) or
+                          any(t in ('FV', 'LV', 'PV', 'TV', 'CV') for t in re.split(r'[_\-.]', mv.upper()))):
+                    group['problemas'].append('Actuador no demostrado como válvula: ' + mv)
+                else:
+                    group['funciones'][mv] = 'V'
+            # C is justified by the control call. I requires literal IC evidence.
+            codes = {t for t in re.split(r'[_\-.]', name.upper()) if t in ISA_VALIDOS and t.endswith('IC')}
+            group['funciones'][name] = 'IC' if codes == {str(group['variable']) + 'IC'} else 'C'
+            areas = set()
+            mapping = mapeo_area_para_plc(top['archivo'])
+            for op in group['miembros']:
+                match = re.match(r'^(\d{3})_[A-Z]+_\d+$', op)
+                if match:
+                    areas.add(match.group(1))
+                areas.update(mapping[t] for t in re.split(r'[_\-.]', op.upper()) if t in mapping)
+            if not areas:
+                for container in h['scope'][1:3]:
+                    areas.update(mapping[t] for t in re.split(r'[_\-.]', container.upper()) if t in mapping)
+            if not areas:
+                default = area_defecto or area_defecto_para(top['archivo'])
+                if default:
+                    areas.add(default)
+            if len(areas) == 1:
+                group['area'] = areas.pop()
+            else:
+                group['problemas'].append('Area ausente/ambigua')
+            loops.append(group)
+    users = defaultdict(list)
+    for group in loops:
+        for identity in set(group['miembros'].values()):
+            users[identity].append(group)
+    for identity, groups in users.items():
+        if len(groups) > 1:
+            for group in groups:
+                group['problemas'].append('Extremo/instancia compartido entre lazos: ' + identity[1])
+    # An ORef with several writers is ambiguous even outside the extracted loops.
+    writers = defaultdict(list)
+    for h in top['hojas']:
+        for node in h['nodos'].values():
+            if node['kind'] == 'ORef':
+                writers[_identidad(top, h['scope'][1], node.get('Operand', ''))].append(h['scope'])
+    for group in loops:
+        for identity in group['miembros'].values():
+            if len(writers[identity]) > 1:
+                group['problemas'].append('Multiples escritores: ' + identity[1])
+    return loops
+
+
+def _abrir_catalogo_ro(path_db):
+    """Own URI connection; never accept a borrowed/write-capable connection."""
+    import sqlite3
+    from pathlib import Path
+    path = Path(path_db).resolve(strict=True)
+    if not path.is_file():
+        raise ValueError('Catalogo no es un archivo')
+    conn = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+    try:
+        conn.execute('PRAGMA query_only=ON')
+        conn.execute('PRAGMA trusted_schema=OFF')
+        conn.execute('BEGIN')
+        allowed = {'sqlite_master', 'areas', 'variables', 'funciones', 'tags'}
+        def authorize(action, arg1, arg2, db, trigger):
+            if action == sqlite3.SQLITE_SELECT:
+                return sqlite3.SQLITE_OK
+            if action == sqlite3.SQLITE_READ and arg1 in allowed and db == 'main' and not trigger:
+                return sqlite3.SQLITE_OK
+            return sqlite3.SQLITE_DENY
+        conn.set_authorizer(authorize)
+        return conn
+    except Exception:
+        conn.close()
+        raise
+
+
+def leer_catalogo_solo_lectura(path_db):
+    """Phase 3. Materialize a consistent read-only catalog; fail closed.
+
+    Retired and inactive records remain occupied. No database module from the
+    application is imported. Missing tables/columns, views, invalid ranges or
+    dangling catalog references abort the audit before any CSV is written.
+    """
+    required = {
+        'areas': {'id', 'codigo', 'rango_inicio', 'rango_fin', 'activo'},
+        'variables': {'id', 'letra'}, 'funciones': {'id', 'letra'},
+        'tags': {'id', 'tag_completo', 'area_id', 'variable_id', 'funcion_id',
+                 'numero_loop', 'estado', 'plc_origen', 'alias_for'}}
+    conn = _abrir_catalogo_ro(path_db)
+    try:
+        tables = dict(conn.execute('SELECT name, type FROM sqlite_master').fetchall())
+        data = {}
+        for table, cols in required.items():
+            if tables.get(table) != 'table':
+                raise ValueError('Esquema invalido: tabla ' + table)
+            cursor = conn.execute('SELECT * FROM ' + table)
+            names = [d[0] for d in cursor.description]
+            if not cols.issubset(names):
+                raise ValueError('Esquema invalido: columnas ' + table)
+            data[table] = [dict(zip(names, row)) for row in cursor]
+    finally:
+        conn.close()
+    indexes = {}
+    for table in ('areas', 'variables', 'funciones'):
+        indexes[table] = {r['id']: r for r in data[table]}
+        if len(indexes[table]) != len(data[table]) or not data[table]:
+            raise ValueError('Catalogo vacio/identidad duplicada: ' + table)
+    areas = {}
+    for row in data['areas']:
+        if (not re.fullmatch(r'\d{3}', row['codigo'] or '') or
+            type(row['rango_inicio']) is not int or type(row['rango_fin']) is not int or
+            not 0 <= row['rango_inicio'] <= row['rango_fin'] <= 9999 or row['codigo'] in areas):
+            raise ValueError('Rango/codigo de area invalido')
+        areas[row['codigo']] = row
+    occupied = defaultdict(set)
+    identities = set()
+    for row in data['tags']:
+        if not row['tag_completo'] or row['tag_completo'] in identities:
+            raise ValueError('Identidad de tag invalida/duplicada')
+        identities.add(row['tag_completo'])
+        if any(row[col] not in indexes[table] for col, table in
+               (('area_id', 'areas'), ('variable_id', 'variables'), ('funcion_id', 'funciones'))):
+            raise ValueError('Referencia de catalogo huerfana')
+        if type(row['numero_loop']) is not int or row['numero_loop'] < 0:
+            raise ValueError('Numero de lazo invalido')
+        row['area'] = indexes['areas'][row['area_id']]['codigo']
+        row['variable'] = indexes['variables'][row['variable_id']]['letra']
+        occupied[(row['area'], row['variable'])].add(row['numero_loop'])
+        # Also reserve literal historical identity if its stored fields disagree.
+        match = re.fullmatch(r'(\d{3})_([A-Z])[A-Z]*_(\d{3,4})', row['tag_completo'])
+        if match:
+            occupied[(match[1], match[2])].add(int(match[3]))
+    return {'areas': areas, 'variables': {r['letra'] for r in data['variables']},
+            'funciones': {r['letra'] for r in data['funciones']},
+            'tags': data['tags'], 'ocupados': dict(occupied)}
+
+
+def validar_lazos_con_catalogo(lazos, catalogo, topologia):
+    """Phase 4. Protect the WHOLE group on exact identity or scoped alias.
+
+    No learned rules, substring/fuzzy matching, normalization of malformed tags,
+    or inference from a controller filename into an unrelated PLC identity.
+    """
+    exact = {r['tag_completo']: r for r in catalogo['tags']}
+    aliases = defaultdict(list)
+    for row in catalogo['tags']:
+        if row['alias_for'] and row['plc_origen']:
+            aliases[(row['plc_origen'], row['alias_for'])].append(row)
+    local_aliases = defaultdict(set)
+    for key, decl in topologia['tags'].items():
+        if decl.get('AliasFor'):
+            local_aliases[decl['AliasFor']].add(key)
+    for group in lazos:
+        matches = []
+        for op, identity in group['miembros'].items():
+            scope, raw = identity
+            qualified = 'Program:' + scope + '.' + raw if scope else raw
+            if raw in exact or qualified in exact:
+                matches.append('identidad exacta ' + raw)
+            alias = _declaracion(topologia, identity).get('AliasFor', '')
+            rows = aliases.get((group['plc'], alias), []) if alias else []
+            if len(rows) == 1 and len(local_aliases[alias]) == 1:
+                matches.append('alias+PLC ' + alias)
+            elif rows:
+                group['problemas'].append('Alias ambiguo en catalogo/L5X: ' + alias)
+        group['protegido'] = bool(matches)
+        group['proteccion'] = '; '.join(sorted(set(matches)))
+        group['validado_catalogo'] = True
+        group['propuestas'] = {}
+    return lazos
+
+
+def proponer_familias_nuevas(lazos, catalogo):
+    """Phase 5. One shared first-free number per proven area+variable loop.
+
+    Reserve only in memory. Never assume 001 or split counters by function.
+    """
+    occupied = {key: set(values) for key, values in catalogo['ocupados'].items()}
+    for group in sorted(lazos, key=lambda g: g['id']):
+        group['propuestas'] = {}
+        if not group.get('validado_catalogo'):
+            raise ValueError('Falta validacion previa contra catalogo')
+        if group['protegido'] or group['problemas']:
+            continue
+        area, var = group['area'], group['variable']
+        spec = catalogo['areas'].get(area)
+        functions = group['funciones']
+        if not spec or not spec['activo'] or var not in catalogo['variables']:
+            group['problemas'].append('Area/variable no habilitada en catalogo')
+            continue
+        if not set(functions.values()).issubset(catalogo['funciones']) or len(set(functions.values())) != len(functions):
+            group['problemas'].append('Funcion ausente/duplicada en familia')
+            continue
+        used = occupied.setdefault((area, var), set())
+        number = next((n for n in range(spec['rango_inicio'], spec['rango_fin'] + 1) if n not in used), None)
+        if number is None:
+            group['problemas'].append('Rango de numeracion agotado')
+            continue
+        used.add(number)
+        group['propuestas'] = {op: f'{area}_{var}{fn}_{number:03d}' for op, fn in functions.items()}
+    return lazos
+
+
+CAMPOS_PROPUESTAS = ['Tag_Original', 'Tag_Propuesto_ISA', 'Bloque_Lógico', 'Estado']
+
+
+def _filas_propuestas(lazos):
+    rows = []
+    for group in sorted(lazos, key=lambda g: g['id']):
+        if group['protegido']:
+            status = 'Validado — lazo protegido: ' + group['proteccion']
+        elif group['problemas']:
+            status = 'Revision requerida — ' + '; '.join(sorted(set(group['problemas'])))
+        else:
+            status = 'Propuesta — familia nueva; confirmar en campo antes de aplicar'
+        for op in sorted(group['miembros']):
+            proposal = '' if group['protegido'] or group['problemas'] else group['propuestas'].get(op, '')
+            rows.append(dict(zip(CAMPOS_PROPUESTAS,
+                        [op, proposal, '/'.join(group['id']), status if proposal or group['protegido'] or group['problemas']
+                         else 'Interna — acondicionamiento; sin instrumento independiente'])))
+    return rows
+
+
+def exportar_propuestas_csv(lazos, path_csv):
+    """Phase 6. The sole audit artifact, including protected/unresolved groups."""
+    from pathlib import Path
+    path = Path(path_csv)
+    if path.suffix.lower() != '.csv':
+        raise ValueError('La salida debe ser CSV')
+    rows = _filas_propuestas(lazos)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=CAMPOS_PROPUESTAS, delimiter=';')
+        writer.writeheader()
+        writer.writerows(rows)
+    return rows
+
+
 def proponer_tag(clase, cod_area, funcion, contador):
     """Genera el tag normalizado [AREA]_[FUNCION]_[NUM] con numeracion por lazo.
     Numeracion POC: secuencial por (area, funcion). El numero de lazo COMPARTIDO
@@ -1344,276 +1742,55 @@ def proponer_tag(clase, cod_area, funcion, contador):
     return f"{cod_area}_{funcion}_{numero:03d}"
 
 
-def procesar(path_l5x, area_defecto=None, plc_nombre=None, conn_aprendizaje=None):
-    """Procesa un .L5X completo y devuelve (filas, resumen).
+DEFAULT_CATALOGO = os.path.join(PROJECT_ROOT, 'app_etiquetas', 'tags_ingenio.db')
+DEFAULT_EXPORT = os.path.join(PROJECT_ROOT, 'exports', 'propuestas_auditoria.csv')
 
-    plc_nombre, conn_aprendizaje: enganche OPCIONAL con la Aprendizaje por
-    Excepcion de la Tags App (app_etiquetas/aprendizaje.py). Si
-    conn_aprendizaje es None (default), este modulo se comporta exactamente
-    igual que siempre -- sigue siendo standalone, sin ninguna dependencia
-    de la Tags App ni de su base de datos. Si se pasa una conexion abierta
-    (ver aprendizaje_motor.abrir_conexion()), cada tag que las reglas de
-    codigo dejarian SIN_CLASIFICAR se consulta primero contra
-    reglas_aprendidas antes de rendirse, y si tampoco hay nada ahi, se
-    archiva solo en la bandeja de pendientes (tags_no_clasificados) --
-    ver aprendizaje_motor.clasificar_con_aprendizaje()."""
-    tree = ET.parse(path_l5x)
-    root = tree.getroot()
 
-    # Import diferido A PROPOSITO: solo se ejecuta si el caller realmente
-    # pidio aprendizaje (conn_aprendizaje != None). auditar_l5x.py no debe
-    # tener NUNCA una dependencia dura de la Tags App / app_etiquetas -- es
-    # el motor standalone, reutilizable sin esa carpeta (ver docstring del
-    # modulo). El import diferido tambien evita el ciclo de imports:
-    # aprendizaje_motor ya hace 'import auditar_l5x' por su cuenta.
-    _clasificar_con_aprendizaje = None
+def procesar(path_l5x, area_defecto=None, plc_nombre=None, conn_aprendizaje=None, *, path_db=None):
+    """Safe six-phase input path; returns new four-column rows and loop summary.
+
+    BREAKING: legacy per-tag fields and learning are no longer supported.
+    Batch runners must migrate; never run their write-capable setup for this audit.
+    This function reads only; main owns the single CSV export.
+    """
     if conn_aprendizaje is not None:
-        from aprendizaje_motor import clasificar_con_aprendizaje as _clasificar_con_aprendizaje
-
-    # Grafo FBD: se construye una sola vez, ANTES del Paso 1, porque ahora lo
-    # necesita clasificar() (Criterio 1: excluir alias crudo que alimenta un
-    # bloque de escalado) ademas del Paso 4 (emparejamiento INTERNA <-> base
-    # por cableado, mas abajo). Antes se construia solo en el Paso 4; se
-    # reutiliza el mismo grafo en los dos lugares.
-    grafo_fbd = construir_grafo_fbd(root)
-    operandos_crudos_escalado = operandos_crudos_a_escalado(grafo_fbd)
-
-    # Mapeo de area efectivo para ESTE PLC (global + override scoped si
-    # corresponde, ej. 'DES' -> 300 en Calderas_8_9_10_Desaireador en vez
-    # de 200/Destileria). Ver mapeo_area_para_plc().
-    mapeo_area_efectivo = mapeo_area_para_plc(path_l5x)
-
-    # ------------------------------------------------------------
-    # Paso 1: clasificar cada tag (clase, funcion, area por NOMBRE propio).
-    # Todavia no se numera: el numero de lazo depende del area final, que
-    # puede completarse en el Paso 2 por herencia de Scope.
-    # ------------------------------------------------------------
-    interim = []
-    for tag in root.iter("Tag"):
-        nombre = tag.get("Name", "")
-        tagtype = tag.get("TagType", "Base")
-        aliasfor = tag.get("AliasFor", "")
-        datatype = tag.get("DataType", "")
-        desc_el = tag.find(".//Description")
-        descripcion = (desc_el.text or "").strip() if desc_el is not None else ""
-
-        if _clasificar_con_aprendizaje is not None:
-            clase, funcion, area, notas = _clasificar_con_aprendizaje(
-                nombre, tagtype, aliasfor, datatype, plc_nombre,
-                operandos_crudos_escalado, conn=conn_aprendizaje,
-            )
-        else:
-            clase, funcion, area, notas = clasificar(
-                nombre, tagtype, aliasfor, datatype, operandos_crudos_escalado
-            )
-        notas = validar_reglas(nombre, funcion, notas, clase)
-
-        interim.append({
-            "tag_viejo": nombre, "clase": clase, "funcion_ISA": funcion or "",
-            "area_detectada": area or "", "datatype": datatype, "alias_for": aliasfor,
-            "descripcion": descripcion, "notas": notas,
-        })
-
-    # Indice auxiliar: tags cuya area SI se detecto por su propio nombre
-    # (usado como evidencia para el voto por mayoria del Paso 2).
-    indice_area_por_nombre = {
-        f["tag_viejo"].upper(): mapeo_area_efectivo[f["area_detectada"]]
-        for f in interim if f["area_detectada"] and mapeo_area_efectivo.get(f["area_detectada"])
-    }
-
-    # ------------------------------------------------------------
-    # Paso 2: herencia de area por Scope (Program/Routine) para los tags
-    # que NO tienen ningun token de area en su propio nombre.
-    # ------------------------------------------------------------
-    tag_a_programa, programa_area, rutina_info = construir_indice_scope(root, mapeo_area_efectivo)
-    cod_area_heredado_por_tag = {}
-    for fila in interim:
-        if fila["area_detectada"]:
-            continue
-        cod_area, metodo, confianza = heredar_area_por_scope(
-            fila["tag_viejo"], tag_a_programa, programa_area, rutina_info, indice_area_por_nombre
-        )
-        if cod_area and confianza == "ALTA":
-            cod_area_heredado_por_tag[fila["tag_viejo"]] = (cod_area, metodo)
-            fila["notas"].append(f"Area heredada por Scope: {metodo}")
-        elif cod_area:
-            cod_area_heredado_por_tag[fila["tag_viejo"]] = (None, None)
-            fila["notas"].append(f"Area candidata por Scope (confianza BAJA, confirmar manualmente): {metodo} -> '{cod_area}'")
-        else:
-            cod_area_heredado_por_tag[fila["tag_viejo"]] = (None, None)
-
-    # ------------------------------------------------------------
-    # Paso 2.5: segundo filtro -> inferencia semantica por palabras clave
-    # de proceso, solo para los tags que SIGUEN sin area resuelta despues
-    # del Paso 2 (ni nombre propio, ni Scope con confianza ALTA).
-    # ------------------------------------------------------------
-    for fila in interim:
-        cod_area_actual, _ = cod_area_heredado_por_tag.get(fila["tag_viejo"], (None, None))
-        if fila["area_detectada"] or cod_area_actual:
-            continue  # ya resuelto antes: no se pisa
-        cod_area_kw, evidencia = area_por_palabras_clave(fila["tag_viejo"])
-        if cod_area_kw == "AMBIGUO":
-            resumen_amb = ", ".join(f"{a} por '{kw}'" for a, kw in evidencia.items())
-            fila["notas"].append(f"Palabra clave AMBIGUA: coincide con mas de un area ({resumen_amb}) - revisar manualmente")
-        elif cod_area_kw:
-            cod_area_heredado_por_tag[fila["tag_viejo"]] = (cod_area_kw, f"palabra clave de proceso '{evidencia}'")
-            fila["notas"].append(f"Area asignada por palabra clave de proceso: '{evidencia}' -> {cod_area_kw}")
-
-    # ------------------------------------------------------------
-    # Paso 2.6: ULTIMO RECURSO -> area por defecto del controlador (PLC
-    # mono-area). Solo alcanza a los tags que siguen sin area tras todas
-    # las capas anteriores; nunca pisa una deteccion previa.
-    # ------------------------------------------------------------
-    if area_defecto:
-        for fila in interim:
-            cod_area_actual, _ = cod_area_heredado_por_tag.get(fila["tag_viejo"], (None, None))
-            if fila["area_detectada"] or cod_area_actual:
-                continue
-            cod_area_heredado_por_tag[fila["tag_viejo"]] = (
-                area_defecto, f"area por defecto del controlador ({area_defecto})"
-            )
-            fila["notas"].append(
-                f"Area asignada por DEFECTO del controlador (PLC mono-area): {area_defecto}"
-            )
-
-    # ------------------------------------------------------------
-    # Paso 3: numerar FUNCIONAL_ISA / FISICO_ISA, ya con el area final
-    # (propia o heredada), y armar las filas definitivas.
-    # ------------------------------------------------------------
-    contador = defaultdict(int)
-    resumen = defaultdict(int)
-    filas = []
-    for fila in interim:
-        area_label = fila["area_detectada"]
-        if area_label:
-            cod_area = mapeo_area_efectivo.get(area_label)
-        else:
-            cod_area, _ = cod_area_heredado_por_tag.get(fila["tag_viejo"], (None, None))
-
-        tag_nuevo = proponer_tag(fila["clase"], cod_area, fila["funcion_ISA"] or None, contador)
-        resumen[fila["clase"]] += 1
-        filas.append({
-            "tag_viejo": fila["tag_viejo"],
-            "clase": fila["clase"],
-            "funcion_ISA": fila["funcion_ISA"],
-            "area_detectada": area_label,
-            "cod_area": cod_area or "",
-            "datatype": fila["datatype"],
-            "alias_for": fila["alias_for"],
-            "tag_nuevo_propuesto": tag_nuevo,
-            "descripcion": fila["descripcion"],
-            "validacion": " | ".join(fila["notas"]),
-        })
-
-    # ------------------------------------------------------------
-    # Paso 4: agrupar los tags INTERNA como miembros de UDT (o logica de
-    # estado con area por nombre/herencia). Requiere que los tags
-    # FUNCIONAL_ISA/FISICO_ISA ya tengan numero de lazo (Paso 3).
-    # ------------------------------------------------------------
-    indice_base = {
-        f["tag_viejo"].upper(): f for f in filas
-        if f["clase"] in ("FUNCIONAL_ISA", "FISICO_ISA")
-    }
-    indice_pendiente = {
-        f["tag_viejo"].upper(): f for f in filas if f["clase"] == "SIN_CLASIFICAR"
-    }
-    # grafo_fbd ya se construyo al inicio de procesar() (Paso 1); se reutiliza.
-
-    for fila in filas:
-        clase = fila["clase"]
-
-        # R3: alias discreto -> miembro de la UDT Motor_AC del equipo.
-        # El nombre del equipo es el resto del tag tras el prefijo de estado
-        # (ESTADO_BBA_AGUA_ESTE -> equipo 'BBA_AGUA_ESTE').
-        if clase == "EQUIPO_DISCRETO":
-            prefijo, miembro = detectar_miembro_equipo(fila["tag_viejo"])
-            cod_area = fila["cod_area"]
-            if not miembro:
-                fila["tag_nuevo_propuesto"] = "PENDIENTE (alias discreto sin prefijo de estado reconocible)"
-                continue
-            equipo = fila["tag_viejo"][len(prefijo):]
-            equipo = re.sub(r"[^A-Z0-9_]", "_", equipo.upper()).strip("_")
-            if not equipo:
-                fila["tag_nuevo_propuesto"] = "PENDIENTE (no se pudo derivar el nombre del equipo)"
-                continue
-            if not cod_area:
-                fila["tag_nuevo_propuesto"] = f"PENDIENTE (equipo '{equipo}.{miembro}' sin area resuelta)"
-                continue
-            fila["tag_nuevo_propuesto"] = f"{cod_area}_{equipo}.{miembro}"
-            continue
-
-        if clase not in ("INTERNA", "INTERNA_SISTEMA"):
-            continue
-
-        tag_nuevo, nota_udt = transformar_interna_a_miembro(
-            fila, indice_base, indice_pendiente, grafo_fbd, cod_area_heredado_por_tag,
-            mapeo_area_efectivo
-        )
-        fila["tag_nuevo_propuesto"] = tag_nuevo
-        fila["validacion"] = (fila["validacion"] + " | " + nota_udt).strip(" |")
-
-    return filas, resumen
+        raise ValueError('conn_aprendizaje prohibida: auditor de solo lectura')
+    top = parsear_topologia_l5x(path_l5x)
+    if plc_nombre is not None and plc_nombre != top['plc']:
+        raise ValueError('plc_nombre difiere de la identidad del Controller L5X')
+    catalog = leer_catalogo_solo_lectura(path_db or DEFAULT_CATALOGO)
+    loops = extraer_lazos_control(top, area_defecto)
+    validar_lazos_con_catalogo(loops, catalog, top)
+    proponer_familias_nuevas(loops, catalog)
+    summary = {'lazos': len(loops), 'protegidos': sum(g['protegido'] for g in loops),
+               'nuevos': sum(bool(g['propuestas']) for g in loops),
+               'revision': sum(bool(g['problemas']) and not g['protegido'] for g in loops)}
+    return _filas_propuestas(loops), summary
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Uso: python auditar_l5x.py <archivo.L5X>")
-        sys.exit(1)
-    path = sys.argv[1]
-    if not os.path.isfile(path):
-        print(f"No existe el archivo: {path}")
-        sys.exit(1)
-
-    filas, resumen = procesar(path, area_defecto=area_defecto_para(path))
-
-    base = os.path.splitext(os.path.basename(path))[0]
-    dir_salida = DIR_SALIDA_INDIVIDUAL
-    os.makedirs(dir_salida, exist_ok=True)
-    campos = ["tag_viejo", "clase", "funcion_ISA", "area_detectada", "cod_area",
-              "datatype", "alias_for", "tag_nuevo_propuesto", "descripcion", "validacion"]
-
-    # Filtro estricto de base de datos limpia: cualquier fila cuyo
-    # tag_nuevo_propuesto contenga 'PENDIENTE' o no se haya podido resolver
-    # (???) va a la planilla de revision de campo, sin importar su clase.
-    # mapeo_<base>.csv queda SOLO con tags mapeados/aprobados con exito.
-    def es_pendiente(f):
-        return "PENDIENTE" in f["tag_nuevo_propuesto"] or "???" in f["tag_nuevo_propuesto"]
-
-    filas_limpias = [f for f in filas if not es_pendiente(f)]
-    filas_pendientes = [f for f in filas if es_pendiente(f)]
-
-    salida = os.path.join(dir_salida, f"mapeo_{base}.csv")
-    with open(salida, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=campos, delimiter=";")
-        w.writeheader()
-        w.writerows(filas_limpias)
-
-    salida_sc = os.path.join(dir_salida, "sin_clasificar.csv")
-    with open(salida_sc, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=campos, delimiter=";")
-        w.writeheader()
-        w.writerows(filas_pendientes)
-
-    total = len(filas)
-    print(f"\n=== AUDITORIA L5X: {base} ===")
-    print(f"Total de tags procesados: {total}")
-    print("-" * 42)
-    for clase, n in sorted(resumen.items(), key=lambda x: -x[1]):
-        print(f"  {clase:18} {n:4}  ({100*n/total:4.1f}%)")
-    alertas = sum(1 for x in filas if x["validacion"])
-    print("-" * 42)
-    print(f"  Tags con alerta/validacion: {alertas}")
-    print(f"  Consolidados en mapeo_{base}.csv (sin PENDIENTE/???): {len(filas_limpias)}")
-    print(f"  Movidos a sin_clasificar.csv (PENDIENTE/??? de cualquier clase): {len(filas_pendientes)}")
-    print(f"\nCSV de mapeo (base limpia) generado: {salida}")
-    print(f"Planilla de revision de campo (PENDIENTE/???): {salida_sc}")
-
-    areas_pendientes = sorted(k for k, v in MAPEO_AREA.items() if v is None)
-    if areas_pendientes:
-        print("\n*** ATENCION: codigo de area PENDIENTE de definir por el Ingenio ***")
-        for a in areas_pendientes:
-            print(f"    {a}: aparece '???' en tag_nuevo_propuesto hasta confirmar su serie numerica")
+def main(argv=None):
+    """Only exports exports/propuestas_auditoria.csv. Never initializes a DB."""
+    import argparse
+    import sqlite3
+    parser = argparse.ArgumentParser(description='Auditoria topologica L5X de solo lectura')
+    parser.add_argument('l5x')
+    parser.add_argument('--db', default=DEFAULT_CATALOGO)
+    args = parser.parse_args(argv)
+    try:
+        # Keep phase orchestration in one path, including procesar callers.
+        rows, summary = procesar(args.l5x, path_db=args.db)
+        os.makedirs(os.path.dirname(DEFAULT_EXPORT), exist_ok=True)
+        with open(DEFAULT_EXPORT, 'w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=CAMPOS_PROPUESTAS, delimiter=';')
+            writer.writeheader()
+            writer.writerows(rows)
+        print(summary)
+        print('CSV: ' + DEFAULT_EXPORT)
+        return 0
+    except (OSError, ValueError, sqlite3.DatabaseError, ET.ParseError) as exc:
+        print('Auditoria abortada sin modificar catalogo: ' + str(exc), file=sys.stderr)
+        return 1
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    sys.exit(main())
