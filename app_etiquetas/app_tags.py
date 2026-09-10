@@ -15,6 +15,7 @@ Ejecutar con:  python app_tags.py
 import os
 import time
 import tkinter as tk
+import unicodedata
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from tkinter import ttk, messagebox, simpledialog
@@ -71,6 +72,88 @@ DICCIONARIOS = {
     "funciones": MAPEO_FUNCIONES,
 }
 
+# Alias de uso cotidiano para que el filtro por sector no dependa del texto
+# exacto del catálogo (DES, MOL, CAL, etc.).
+AREAS_ALIASES_BUSQUEDA = {
+    "000": "recepcion preparacion cana rcp",
+    "100": "molienda mol",
+    "200": "destileria des dest",
+    "250": "biodestileria bio bioetanol",
+    "300": "calderas cal vapor",
+    "400": "clarificacion encalado cla clar",
+    "500": "evaporacion evap eva",
+    "600": "cocimiento tachos coc",
+    "700": "centrifugado purga ccv cen",
+    "800": "secado envase sec",
+    "900": "fuerza motriz turbogeneradores usina fm",
+    "950": "tratamiento agua servicios osmosis tas",
+}
+AREAS_ALIAS_FABRICA = frozenset({"400", "500", "600", "700", "800"})
+_AREAS_CATALOGO_CACHE = None
+
+
+def _normalizar_texto_busqueda(texto):
+    """Normaliza mayúsculas y acentos sin alterar guiones bajos ni dígitos."""
+    texto = unicodedata.normalize("NFD", str(texto or ""))
+    texto = "".join(caracter for caracter in texto
+                    if unicodedata.category(caracter) != "Mn")
+    return texto.casefold()
+
+
+def _valor_fila_busqueda(fila, clave):
+    try:
+        return fila[clave] or ""
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def _texto_buscable_tag(fila):
+    """Construye el índice textual común a ambos buscadores."""
+    codigo_area = _valor_fila_busqueda(fila, "area_codigo")
+    nombre_area = _valor_fila_busqueda(fila, "area_nombre")
+    texto_area = " ".join((
+        "area áreas sector sectores",
+        str(codigo_area), str(nombre_area),
+        AREAS_ALIASES_BUSQUEDA.get(str(codigo_area), ""),
+        "fabrica" if str(codigo_area) in AREAS_ALIAS_FABRICA else "",
+    ))
+    campos = (
+        "tag_completo", "descripcion", "alias_for", "estado", "tipo_senal",
+        "entrada_salida", "fluido_proceso", "comentarios", "variable_nombre",
+        "funcion_nombre", "lectura_isa",
+    )
+    return _normalizar_texto_busqueda(" ".join((
+        texto_area,
+        *(str(_valor_fila_busqueda(fila, campo)) for campo in campos),
+    )))
+
+
+def _coincide_busqueda(consulta, texto_buscable):
+    """Exige que todas las palabras normalizadas aparezcan en el texto."""
+    terminos = _normalizar_texto_busqueda(consulta).split()
+    texto = _normalizar_texto_busqueda(texto_buscable)
+    return not terminos or all(termino in texto for termino in terminos)
+
+
+def _nombre_area_desde_catalogo(codigo, diccionarios):
+    """Obtiene el nombre real del catálogo y solo después aplica fallback."""
+    global _AREAS_CATALOGO_CACHE
+    if _AREAS_CATALOGO_CACHE is None:
+        try:
+            _AREAS_CATALOGO_CACHE = {
+                str(area["codigo"]): str(area["nombre"] or "").strip()
+                for area in db.listar_areas()
+            }
+        except Exception:
+            _AREAS_CATALOGO_CACHE = {}
+    nombre = _AREAS_CATALOGO_CACHE.get(str(codigo), "").strip()
+    if nombre and nombre != str(codigo):
+        return nombre
+    nombre = str(diccionarios.get("areas", {}).get(codigo, "") or "").strip()
+    if nombre and nombre != str(codigo):
+        return nombre
+    return str(codigo)
+
 
 def traducir_tag_humano(tag_completo, diccionarios):
     """Traduce un tag ISA-5.1 a lectura humana (área, variable, función)."""
@@ -81,7 +164,7 @@ def traducir_tag_humano(tag_completo, diccionarios):
     if not funcion:
         return "Formato de tag no estándar"
     variable_letra, detalle_letras = funcion[0], funcion[1:]
-    nombre_area = diccionarios["areas"].get(area_code, area_code)
+    nombre_area = _nombre_area_desde_catalogo(area_code, diccionarios)
     variable = diccionarios["variables"].get(variable_letra, variable_letra)
     funcion_detalle = diccionarios["funciones"].get(
         detalle_letras, detalle_letras or variable_letra
@@ -921,9 +1004,17 @@ class TagGovernanceApp(tb.Window):
         ttk.Button(barra, text="← VOLVER", command=lambda: self.mostrar_vista("inicio"), style="secondary.TButton").pack(side="left")
         self.btn_exportar = ttk.Button(barra, text="Exportar a Excel", command=self.on_exportar_excel, style="success.TButton"); self.btn_exportar.pack(side="right")
         ttk.Label(vista, text="Búsqueda expandida", font=("Segoe UI", 18, "bold")).grid(row=1, column=0, sticky="w", pady=(16,6))
-        buscar = ttk.Frame(vista); buscar.grid(row=2, column=0, sticky="nsew"); buscar.columnconfigure(0, weight=1); buscar.rowconfigure(1, weight=1)
+        buscar = ttk.Frame(vista); buscar.grid(row=2, column=0, sticky="nsew"); buscar.columnconfigure(0, weight=1); buscar.rowconfigure(2, weight=1)
         self.entry_buscar = ttk.Entry(buscar); self.entry_buscar.grid(row=0, column=0, sticky="ew", pady=(0,8)); self.entry_buscar.bind("<KeyRelease>", self._on_buscar_cambio)
         self.lbl_resultado_busqueda = ttk.Label(buscar, text="", style="secondary.TLabel"); self.lbl_resultado_busqueda.grid(row=0, column=1, padx=(10,0))
+        self.lbl_lectura_expandida = ttk.Label(
+            buscar, text="", style="IsaReading.TLabel", width=1,
+            font=("Segoe UI", 13, "bold"), padding=(10, 6),
+            wraplength=280, justify="center", anchor="center",
+        )
+        self.lbl_lectura_expandida.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        self.lbl_lectura_expandida.grid_remove()
+        buscar.bind("<Configure>", self._ajustar_ancho_lectura_expandida)
         columnas=("tag","estado","tipo_senal","io","fluido","fecha","descripcion")
         self.tree_tags = ttk.Treeview(
             buscar, columns=columnas, show="headings", selectmode="extended",
@@ -931,7 +1022,7 @@ class TagGovernanceApp(tb.Window):
         )
         for col,title,width in (("tag","Tag",150),("estado","Estado",110),("tipo_senal","Tipo de Señal",110),("io","Entrada/Salida",120),("fluido","Fluido/Product",130),("fecha","Fecha/Hora creación",150),("descripcion","Descripción/Alias",350)):
             self.tree_tags.heading(col,text=title); self.tree_tags.column(col,width=width,anchor="w")
-        self.tree_tags.grid(row=1,column=0,columnspan=2,sticky="nsew")
+        self.tree_tags.grid(row=2,column=0,columnspan=2,sticky="nsew")
         self.tree_tags.bind("<<TreeviewSelect>>", self._actualizar_contador_seleccion_expandida)
         self.tree_tags.bind("<Shift-Up>", lambda _event: self._extender_seleccion_expandida("up"))
         self.tree_tags.bind("<Shift-Down>", lambda _event: self._extender_seleccion_expandida("down"))
@@ -1089,23 +1180,33 @@ class TagGovernanceApp(tb.Window):
         self.mostrar_vista("inicio")
 
     def _obtener_tags_recientes(self, texto=""):
-        """Consulta toda la base y devuelve hasta diez coincidencias recientes."""
+        """Carga una vez la base y filtra por palabras en memoria; devuelve diez."""
         conn = db.get_connection()
         try:
-            patron = f"%{texto.strip()}%"
-            return conn.execute(
+            filas = conn.execute(
                 """
-                SELECT tag_completo, estado, fecha_creacion
-                FROM tags
-                WHERE tag_completo LIKE ? OR descripcion LIKE ? OR estado LIKE ?
-                   OR comentarios LIKE ? OR fluido_proceso LIKE ?
-                ORDER BY fecha_creacion DESC
-                LIMIT 10
-                """,
-                (patron, patron, patron, patron, patron),
+                SELECT t.*, a.codigo AS area_codigo, a.nombre AS area_nombre,
+                       v.letra AS variable_letra, v.nombre AS variable_nombre,
+                       f.letra AS funcion_letra, f.nombre AS funcion_nombre
+                FROM tags t
+                LEFT JOIN areas a ON t.area_id = a.id
+                LEFT JOIN variables v ON t.variable_id = v.id
+                LEFT JOIN funciones f ON t.funcion_id = f.id
+                ORDER BY t.fecha_creacion DESC
+                """
             ).fetchall()
         finally:
             conn.close()
+
+        resultado = []
+        for fila in filas:
+            registro = dict(fila)
+            registro["lectura_isa"] = traducir_tag_humano(
+                registro.get("tag_completo", ""), DICCIONARIOS
+            )
+            if _coincide_busqueda(texto, _texto_buscable_tag(registro)):
+                resultado.append(registro)
+        return resultado[:10]
 
     def refrescar_tags_recientes(self, texto=""):
         if not hasattr(self, "tree_recientes"):
@@ -1113,9 +1214,16 @@ class TagGovernanceApp(tb.Window):
         self.tree_recientes.delete(*self.tree_recientes.get_children())
         filas = self._obtener_tags_recientes(texto)
         for fila in filas:
-            self.tree_recientes.insert("", tk.END, iid=fila["tag_completo"], values=(fila["tag_completo"], fila["estado"], fila["fecha_creacion"] or ""))
+            self.tree_recientes.insert(
+                "", tk.END, iid=fila["tag_completo"],
+                values=(fila["tag_completo"], fila["estado"], fila["fecha_creacion"] or ""),
+            )
         if not filas and texto.strip():
-            self.tree_recientes.insert("", tk.END, values=("No se encontraron tags que coincidan con la búsqueda", "", ""))
+            self.tree_recientes.insert(
+                "", tk.END, iid="__sin_resultados_rapida__",
+                values=("Sin resultados para la búsqueda", "", ""),
+                tags=("sin_resultados",),
+            )
         self.btn_exportar_recientes.config(state="disabled")
 
     def filtrar_tags_recientes(self, _event=None):
@@ -1126,6 +1234,10 @@ class TagGovernanceApp(tb.Window):
 
     def _detalle_reciente(self, _event=None):
         seleccion = self.tree_recientes.selection()
+        if "__sin_resultados_rapida__" in seleccion:
+            self.tree_recientes.selection_remove("__sin_resultados_rapida__")
+            self.btn_exportar_recientes.config(state="disabled")
+            return
         for item in self.tree_recientes.get_children():
             self.tree_recientes.item(item, tags=("selected",) if item in seleccion else ())
         self.btn_exportar_recientes.config(state="normal" if seleccion else "disabled")
@@ -1311,11 +1423,13 @@ class TagGovernanceApp(tb.Window):
         self._refrescar_grilla_general()
 
     def _recargar_grilla(self):
+        self._indice_busqueda_expandida = None
         self.tree_tags.delete(*self.tree_tags.get_children())
         self._refrescar_grilla_general(self.entry_buscar.get().strip())
 
     def refrescar_paso5(self):
         """Recarga por completo la grilla del Paso 5 desde la base."""
+        self._indice_busqueda_expandida = None
         self.tree_tags.delete(*self.tree_tags.get_children())
         filas = db.buscar_tags("")
         for f in filas:
@@ -1366,34 +1480,91 @@ class TagGovernanceApp(tb.Window):
     def _on_buscar_cambio(self, event=None):
         self._refrescar_grilla_general(self.entry_buscar.get().strip())
 
-    def _refrescar_grilla_general(self, texto=""):
-        """SOLO LECTURA. Buscador multi-término inteligente: el texto se
-        pasa a minúsculas y se separa en palabras; cada fila debe
-        contener todas ellas (en cualquier orden y en cualquier
-        columna) para quedar visible. La grilla se puebla desde la base
-        solo la primera vez; los filtrados posteriores ocultan/muestran
-        filas con detach()/reattach() sin re-consultar la base."""
-        if not self.tree_tags.get_children():
-            filas = db.buscar_tags("")
-            for f in filas:
-                tipo_senal = f["tipo_senal"] or "Desconocido"
-                entrada_salida = f["entrada_salida"] or "N/D"
-                tags_fila = ("retirado",) if f["estado"] == "Retirado" else ()
-                self.tree_tags.insert("", tk.END, iid=f["tag_completo"], values=(
-                    f["tag_completo"], f["estado"], tipo_senal, entrada_salida,
-                    f["fluido_proceso"] or "",
-                    f["fecha_creacion"] or "", f["descripcion"] or "",
-                ), tags=tags_fila)
+    def _cargar_indice_busqueda_expandida(self):
+        """Carga una sola vez todos los tags y su texto buscable normalizado."""
+        conn = db.get_connection()
+        try:
+            filas = conn.execute(
+                """
+                SELECT t.*, a.codigo AS area_codigo, a.nombre AS area_nombre,
+                       v.letra AS variable_letra, v.nombre AS variable_nombre,
+                       f.letra AS funcion_letra, f.nombre AS funcion_nombre
+                FROM tags t
+                LEFT JOIN areas a ON t.area_id = a.id
+                LEFT JOIN variables v ON t.variable_id = v.id
+                LEFT JOIN funciones f ON t.funcion_id = f.id
+                ORDER BY t.fecha_creacion DESC
+                """
+            ).fetchall()
+        finally:
+            conn.close()
 
-        terminos = texto.lower().split()
-        for item in self.tree_tags.get_children():
-            fila = " ".join(self.tree_tags.item(item, "values")).lower()
-            if all(term in fila for term in terminos):
-                self.tree_tags.reattach(item, "", "end")
+        self._indice_busqueda_expandida = {}
+        for fila in filas:
+            registro = dict(fila)
+            registro["lectura_isa"] = traducir_tag_humano(
+                registro.get("tag_completo", ""), DICCIONARIOS
+            )
+            registro["_texto_buscable"] = _texto_buscable_tag(registro)
+            self._indice_busqueda_expandida[registro["tag_completo"]] = registro
+
+        self.tree_tags.delete(*self.tree_tags.get_children())
+        for registro in self._indice_busqueda_expandida.values():
+            tipo_senal = registro.get("tipo_senal") or "Desconocido"
+            entrada_salida = registro.get("entrada_salida") or "N/D"
+            tags_fila = ("retirado",) if registro.get("estado") == "Retirado" else ()
+            self.tree_tags.insert(
+                "", tk.END, iid=registro["tag_completo"],
+                values=(
+                    registro["tag_completo"], registro.get("estado") or "",
+                    tipo_senal, entrada_salida, registro.get("fluido_proceso") or "",
+                    registro.get("fecha_creacion") or "", registro.get("descripcion") or "",
+                ), tags=tags_fila,
+            )
+
+    def _refrescar_grilla_general(self, texto=""):
+        """Filtra en memoria por todas las palabras y todos los campos."""
+        if getattr(self, "_indice_busqueda_expandida", None) is None:
+            self._cargar_indice_busqueda_expandida()
+
+        sentinel = "__sin_resultados_expandida__"
+        if self.tree_tags.exists(sentinel):
+            self.tree_tags.delete(sentinel)
+
+        coincidencias = []
+        for iid, registro in self._indice_busqueda_expandida.items():
+            coincide = _coincide_busqueda(texto, registro["_texto_buscable"])
+            if coincide:
+                coincidencias.append(iid)
+                self.tree_tags.reattach(iid, "", "end")
             else:
-                self.tree_tags.detach(item)
-        total = len(self.tree_tags.get_children())
-        self._actualizar_contador_seleccion_expandida(total=total, en_total=not bool(texto))
+                self.tree_tags.detach(iid)
+
+        if not coincidencias and texto.strip():
+            self.tree_tags.selection_remove(self.tree_tags.selection())
+            self.tree_tags.insert(
+                "", tk.END, iid=sentinel,
+                values=("Sin resultados para la búsqueda", "", "", "", "", "", ""),
+                tags=("sin_resultados",),
+            )
+        self._actualizar_contador_seleccion_expandida(
+            total=len(coincidencias), en_total=not bool(texto.strip())
+        )
+
+    def _ajustar_ancho_lectura_expandida(self, event):
+        """Mantiene el recuadro dentro del ancho ya asignado a la búsqueda."""
+        self.lbl_lectura_expandida.configure(wraplength=max(240, event.width - 28))
+
+    def _actualizar_lectura_expandida(self):
+        """Muestra lectura ISA únicamente para una selección individual."""
+        seleccion = self.tree_tags.selection()
+        if len(self.tree_tags.selection()) == 1 and seleccion[0] != "__sin_resultados_expandida__":
+            self.lbl_lectura_expandida.config(
+                text="Lectura ISA-5.1: " + traducir_tag_humano(seleccion[0], DICCIONARIOS)
+            )
+            self.lbl_lectura_expandida.grid()
+        else:
+            self.lbl_lectura_expandida.grid_remove()
 
     def _actualizar_contador_seleccion_expandida(self, _event=None, total=None, en_total=False):
         """Muestra el total visible y la selección nativa de la grilla expandida."""
@@ -1406,6 +1577,8 @@ class TagGovernanceApp(tb.Window):
         self.lbl_resultado_busqueda.config(
             text=f"{total} tag(s){sufijo} · {seleccionados} seleccionados"
         )
+        if hasattr(self, "lbl_lectura_expandida"):
+            self._actualizar_lectura_expandida()
 
     def _extender_seleccion_expandida(self, direccion):
         """Extiende la selección visible de la grilla con Shift+Flecha."""
