@@ -38,13 +38,16 @@ def _estilos():
     ss = getSampleStyleSheet()
     e = {
         "h1": ParagraphStyle("h1", parent=ss["Heading1"], fontSize=17, leading=21,
-                              textColor=AZUL, spaceBefore=6, spaceAfter=8),
+                              textColor=AZUL, spaceBefore=6, spaceAfter=8, keepWithNext=1),
         "h2": ParagraphStyle("h2", parent=ss["Heading2"], fontSize=13.5, leading=17,
-                              textColor=AZUL, spaceBefore=14, spaceAfter=6),
+                              textColor=AZUL, spaceBefore=14, spaceAfter=6, keepWithNext=1),
         "h3": ParagraphStyle("h3", parent=ss["Heading3"], fontSize=11.5, leading=14,
-                              textColor=colors.HexColor("#2E5F8A"), spaceBefore=10, spaceAfter=4),
+                              textColor=colors.HexColor("#2E5F8A"), spaceBefore=10, spaceAfter=4,
+                              keepWithNext=1),
         "p": ParagraphStyle("p", parent=ss["BodyText"], fontSize=9.5, leading=13.5,
                              alignment=TA_LEFT, spaceAfter=6),
+        "p_kw": ParagraphStyle("p_kw", parent=ss["BodyText"], fontSize=9.5, leading=13.5,
+                               alignment=TA_LEFT, spaceAfter=6, keepWithNext=1),
         "celda": ParagraphStyle("celda", parent=ss["BodyText"], fontSize=8, leading=10.5),
         "celda_h": ParagraphStyle("celda_h", parent=ss["BodyText"], fontSize=8, leading=10.5,
                                    textColor=colors.white, fontName="Helvetica-Bold"),
@@ -168,8 +171,9 @@ def convertir(path_md, path_pdf=None):
                 items.append(ListItem(Paragraph(_inline(txt), e["p"]), leftIndent=12))
                 i += 1
             ordenada = bool(re.match(r"^\d+\.", s))
+            inicio = re.match(r"^(\d+)\.", s).group(1) if ordenada else None
             story.append(ListFlowable(items, bulletType="1" if ordenada else "bullet",
-                                       start="1" if ordenada else None, leftIndent=14))
+                                       start=inicio, leftIndent=14))
             story.append(Spacer(1, 5))
             continue
 
@@ -191,16 +195,38 @@ def convertir(path_md, path_pdf=None):
             i += 1
             continue
 
-        # --- parrafo (junta lineas consecutivas) ---
+        # --- parrafo (junta lineas consecutivas; respeta el salto duro de 2 espacios) ---
         buf = []
         while i < n and lineas[i].strip() and not re.match(
                 r"^(#{1,3}\s|\||```|<pre|>|[-*]\s|\d+\.\s|---$|\*\*\*$|___$)", lineas[i].strip()):
-            buf.append(lineas[i].strip())
+            buf.append(lineas[i].rstrip("\n"))
             i += 1
         if buf:
-            story.append(Paragraph(_inline(" ".join(buf)), e["p"]))
+            piezas = []
+            for j, cruda in enumerate(buf):
+                piezas.append(_inline(cruda.strip()))
+                if j < len(buf) - 1:
+                    piezas.append("<br/>" if cruda.endswith("  ") else " ")
+            texto_plano = " ".join(t.strip() for t in buf)
+            # Un parrafo que termina en ':' introduce el bloque siguiente (tabla, lista, codigo):
+            # si queda solo al pie de pagina se lo empuja junto con lo que anuncia.
+            estilo = e["p_kw"] if texto_plano.rstrip().endswith(":") else e["p"]
+            story.append(Paragraph("".join(piezas), estilo))
         else:
             i += 1
+
+    # keepWithNext de reportlab no siempre alcanza (falla con ListFlowable y con titulo->titulo):
+    # se pega explicitamente cada flowable que pide keepWithNext con el bloque siguiente. El
+    # recorrido va de atras hacia adelante, asi las cadenas titulo->titulo->bloque quedan cubiertas
+    # por pares encadenados y no queda ningun titulo solo al pie de pagina.
+    for indice in range(len(story) - 2, -1, -1):
+        actual, siguiente = story[indice], story[indice + 1]
+        estilo = getattr(actual, "style", None)
+        if estilo is None or not getattr(estilo, "keepWithNext", 0):
+            continue
+        if isinstance(siguiente, (Spacer, HRFlowable, PageBreak)):
+            continue
+        story[indice:indice + 2] = [KeepTogether([actual, siguiente])]
 
     doc = SimpleDocTemplate(
         path_pdf, pagesize=A4,

@@ -5,6 +5,7 @@ from isa_rules import (
     funciones_permitidas_para_variable,
     validar_funcion_isa,
 )
+from validador_isa import auditar_tag_recien_guardado
 
 
 class ReglasAsistenteISATest(unittest.TestCase):
@@ -23,6 +24,17 @@ class ReglasAsistenteISATest(unittest.TestCase):
 
     def test_se_acepta_indicacion_antes_de_transmision(self):
         self.assertEqual(validar_funcion_isa("IT"), (True, ""))
+
+    def test_y_r_a_cierra_rol_de_elemento_final_y_detecta_pares_faltantes(self):
+        tags = ["700_LT_012", "700_LIC_012", "700_LY_012"]
+        for tag in tags:
+            faltantes, _sugerencias = auditar_tag_recien_guardado(tag, tags)
+            self.assertEqual(faltantes, [])
+
+        faltantes, _sugerencias = auditar_tag_recien_guardado("700_LY_012", ["700_LY_012"])
+        self.assertEqual(len(faltantes), 2)
+        self.assertTrue(any("700_LT_012" in texto for texto in faltantes))
+        self.assertTrue(any("700_LIC_012" in texto for texto in faltantes))
 
     def test_densidad_no_ofrece_control_ni_valvula(self):
         permitidas = funciones_permitidas_para_variable("D", {"T", "IT", "I", "C", "V", "A", "G"})

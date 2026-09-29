@@ -1,0 +1,103 @@
+GUIA - 8 CANALES A REVISAR CON LOS COMPANEROS DE PLANTA
+Fecha: 29/09/2026
+Base de tags: app_etiquetas\tags_ingenio.db, 478 tags
+SHA-256: 601519b9c76d1d789b50d77df613fe642c92531f1cbf7c9259c618fb61c6f92b
+Proyectos en esta carpeta: 1_TRAPICHE2022.ACD, 2_DESTILERIA.ACD, 3_Calderas_8_9_10_Desaireador.ACD
+
+COMO USARLA: abrir el .ACD del PLC en Studio 5000, ir al programa/rutina y hoja FBD indicada,
+y mirar el bloque que consume el canal. Cada canal tiene DOS identidades contradictorias sobre
+el MISMO canal fisico (el alias declarado en el controlador y lo que realmente procesa o escribe
+el bloque del programa). Con la respuesta se define la identidad real y el canal pasa a ser un tag.
+
+==================================================================================================
+1) TRAPICHE2022 (area 100) - canal Local:2:I.Ch5Data
+   Programa/Rutina FBD : ESCALADOS / CORRIENTE
+   Hoja / Bloque       : hoja 1, bloque SCL_41 (ID 430)
+   Identidad A (alias) : Slot_ST_TURBINA_2DO_MOL   (tacometro turbina 2o molino)
+   Identidad B (bloque): escribe IT_BBA_AGUA_INMIBICION_OESTE, escala 0-1500
+   PREGUNTA: en el slot 2 canal 5, esta cableado el transformador de corriente de la bomba de
+   imbibicion Oeste (100_IT) o el tacometro de la turbina del 2o molino (100_ST)?
+
+2) TRAPICHE2022 (area 100) - canal Local:3:I.Ch2Data
+   Programa/Rutina FBD : ESCALADOS / CAUDAL
+   Hoja / Bloque       : hoja 1, B_FT_VAPOR_DESFIBRADOR (ID 90, bloque cuadratico)
+   Identidad A (alias) : Slot_IT_BBA_MACERACION_3ER  (corriente bomba maceracion 3er molino)
+   Identidad B (bloque): escribe FT_VAPOR_DESFIBRADOR (raiz cuadrada => caudal)
+   PREGUNTA: la rutina CAUDAL lo usa como caudalimetro de vapor del desfibrador (100_FT) pero el
+   alias dice corriente (100_IT). Cual vale?
+
+3) TRAPICHE2022 (area 100) - canal Local:3:I.Ch4Data
+   Programa/Rutina FBD : ESCALADOS / CAUDAL
+   Hoja / Bloque       : hoja 1, SCL_14 (ID 81)
+   Identidad A (alias) : Slot_IT_BBA_MACERACION_4TO  (corriente bomba maceracion 4o molino)
+   Identidad B (bloque): escribe FT_AGUA_LAVADO_TAMIS
+   PREGUNTA: caudalimetro de agua de lavado de tamiz (100_FT) o corriente de la bomba de
+   maceracion del 4o molino (100_IT)?
+
+4) TRAPICHE2022 (area 100) - canal Local:9:I.Ch[1].Data
+   Programa/Rutina FBD : ESCALADOS / TEMPERATURA
+   Hoja / Bloque       : hoja 1, B_TT_MOTOR_ROLO_NORTE_1_MOL (ID 25)
+   Identidad A (alias) : Slot_TT_BOBINA_MOTOR_ROLO_NORTE_1_MOL
+   Identidad B (bloque): escribe TT_BOBINA_MOTOR_ROLO_1_MOL (mismo Pt100, sin la palabra NORTE)
+   PREGUNTA: confirmas que TT_BOBINA_MOTOR_ROLO_1_MOL y ..._NORTE_1_MOL son el mismo instrumento?
+   Si si => se crea 100_TT_057 inmediatamente.
+
+5) DESTILERIA (area 200) - canal jw_fermerntacion_2022:2:I.Ch2Data
+   Programa/Rutina FBD : JW / ESCLADOS_PT_FT_LT_TT
+   Hoja / Bloque       : hoja 4, ALM_TT_ENTRADA_ENF_ALCOHOL (ID 193, lee el canal crudo, sin escalado)
+   Identidad A (alias) : Slot_ST_CENTRIFUGA_3  (y en FERMENTACION el bloque B_ST_CENTRIFUGA_3
+                         escribe ST_CENTRIFUGA_3, velocidad)
+   Identidad B (bloque): el bloque que lo lee en JW se llama "temperatura de entrada al enfriador
+                         de alcohol"
+   PREGUNTA: ese canal mide las RPM de la Centrifuga 3 de levadura (200_ST) o la temperatura de
+   entrada al enfriador de alcohol (200_TT)?
+
+6) DESTILERIA (area 200) - canal jw_fermerntacion_2022:2:I.Ch4Data
+   Programa/Rutina FBD : JW / ESCLADOS_PT_FT_LT_TT
+   Hoja / Bloque       : hoja 4, ALM_TT_ENTRADA_CAL_VINO (ID 192, lee el canal crudo)
+   Identidad A (alias) : Slot_ST_CENTRIFUGA_5  (y B_ST_CENTRIFUGA_5 -> ST_CENTRIFUGA_5)
+   Identidad B (bloque): el bloque que lo lee se llama "temperatura del calentador de vino"
+   PREGUNTA: RPM de la Centrifuga 5 (200_ST) o temperatura del calentador de vino (200_TT)?
+
+7) Calderas_8_9_10_Desaireador (area 300) - canal Desaireador:3:I.Ch[5].Data
+   Programa/Rutina FBD : DES / DES_S2_ESCALADO_AI  Y  DES / DES_S3_ESCALADO_AI
+   Hoja / Bloque       : hoja 1, SCL_19 (ID 26) -> TEMP_CCM_DES, escala 0-150 grados C
+                         hoja 1, SCL_15 (ID 30) -> ST_DES_ARRANQUE_BBA_TK_1000_BACKUP, 0-1500 RPM
+   Identidad A (alias) : DES_S3_IT_BBA_4  (corriente)
+   Identidad B (bloque): DOS bloques vivos a la vez: uno lo publica como velocidad y el otro como
+                         temperatura del CCM
+   PREGUNTA: que instrumento esta conectado en Desaireador:3:I.Ch[5]: la corriente de la bomba
+   (300_IT), la velocidad (300_ST) o la temperatura del CCM (300_TT)?
+
+8) Calderas_8_9_10_Desaireador (area 300) - canal Desaireador:3:I.Ch[1].Data
+   Programa/Rutina FBD : DES (ningun bloque lo lee en todo el programa)
+   Hoja / Bloque       : -
+   Identidad A (alias) : DES_S3_ST_BBA_10  (velocidad bomba 10)
+   Identidad B (bloque): ninguna; el alias esta declarado pero no hay bloque cableado
+   PREGUNTA: existe la bomba 10 y queres reservarle su tag 300_ST_075 aunque hoy no este cableada?
+
+==================================================================================================
+BONUS - 2 salidas YA numeradas con alias viejo cruzado (verificar en campo)
+ 700_PV_002  lazo B_PID_VAL_20_10_AUX_1 (FABRICA, FAB_CCV/CCV_PC_ALTA_ESCAPE)
+            canal ISLA_FAB_AI:13:O.Ch[6].Data, alias viejo EVAP_S13_LCD_MELADO_5TO_EFE
+            El PID controla presion 20-10 bar pero el alias dice melado de 5o efecto.
+ 400_PV_004  lazo B_PID_VAL_20_10_AUX_2 (FABRICA, FAB_CCV/CCV_PC_ALTA_ESCAPE)
+            canal SULFO_ENCALADO:8:O.Ch7Data, alias Slot3_PV_VAL_CTROL_LT_J_ENCALADO
+            El PID controla presion 20-10 bar pero el alias apunta a una valvula de nivel.
+
+==================================================================================================
+QUE PASA CON CADA RESPUESTA
+ Canales 1, 2, 3, 5, 6, 7 -> con la identidad confirmada se crea 1 tag por canal (el numero libre
+   ya esta reservado en exports\plan_maestro_consolidado_v5_homologado_290926.csv).
+ Canal 4 -> si es el mismo Pt100 se crea 1 solo tag: 100_TT_057.
+ Canal 8 -> si la bomba 10 existe se reserva 300_ST_075; si no existe se borra el alias del PLC.
+
+ORIGEN DE LOS 3 .ACD COPIADOS (copias verificadas byte a byte, SHA-256 copia == original)
+ 1) ACD_Para_Convertir/ACD_Para_Convertir - hechos/TRAPICHE2022/TRAPICHE2022...BAK031.acd
+    2026-07-30 05:40 - 5,10 MB   (mas nuevo que el TRAPICHE2022.ACD del 15/07)
+ 2) ACD_Para_Convertir/ACD_Para_Convertir - hechos/DESTILERIA/DESTILERIA_RECUPERADO.ACD
+    2026-08-05 16:27 - 8,58 MB   (alternativa limpia: DESTILERIA.ACD del 22/07)
+ 3) data_historica/proyectos_studio5000/Calderas_8_9_10_Desaireador.ACD
+    2026-07-15 07:41 - 4,81 MB   (el L5X de produccion es del 18/08, mas nuevo que todo ACD)
+Los originales NO se movieron: siguen en su ubicacion.
+Alternativas por PLC (con fecha y ruta): archivo_ordenado\inventario_acd_y_exports_290926.json

@@ -8,3 +8,23 @@ __pycache__/
 github_pusher.py
 probar_lazo.py
 *.log
+
+# --- Pesados y binarios de Studio 5000 / herramientas (agregado 29/09/2026) ---
+# Evita que un "git add" accidental suba gigabytes de .ACD, .L5X y volcados de instaladores.
+*.ACD
+*.acd
+*.BAK
+*.bak
+*.zip
+*.rar
+*.exe
+*.dmp
+archivo_ordenado/
+p pasar/
+ACD_Para_Convertir/
+archivos ACD y L5X auditados/
+data_historica/
+auto_agustin/
+L5X_Produccion/
+Matlab R2013a Portable/
+30.00.00-Studio5000-DVD/

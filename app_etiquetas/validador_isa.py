@@ -17,18 +17,25 @@ _ETIQUETA_ROL = {"T": "T", "C": "IC", "V": "V"}
 _NOMBRE_ROL = {
     "SENSOR": "Transmisor (sensor)",
     "CONTROLADOR": "Controlador",
-    "ACTUADOR": "Actuador (válvula)",
+    "ACTUADOR": "Elemento final (válvula o motor/convertidor)",
 }
 
 
 def _rol_de_funcion(funcion):
     if "C" in funcion:
         return "CONTROLADOR"
+    # R-A: Y identifica un elemento final no-válvula (motor/convertidor).
+    if "V" in funcion or "Y" in funcion:
+        return "ACTUADOR"
     if "T" in funcion:
         return "SENSOR"
-    if "V" in funcion:
-        return "ACTUADOR"
     return None
+
+
+def _cubre_rol(funcion, codigo_requerido):
+    if codigo_requerido == "V":
+        return "V" in funcion or "Y" in funcion
+    return codigo_requerido in funcion
 
 
 def _tag_completo_de(tag):
@@ -76,7 +83,7 @@ def auditar_tag_recien_guardado(tag_guardado, lista_tags_existentes):
     for rol_requerido, letra in REGLAS_VALIDACION["LAZOS_CERRADOS"].items():
         if rol_requerido == rol:
             continue
-        cubierto = any(letra in d[2] for d in mismo_lazo)
+        cubierto = any(_cubre_rol(d[2], letra) for d in mismo_lazo)
         if not cubierto:
             tag_meta = f"{area}_{variable}{_ETIQUETA_ROL[letra]}_{lazo}"
             faltantes_obligatorios.append(

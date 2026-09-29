@@ -131,7 +131,21 @@ def area_defecto_para(nombre_archivo):
 # ------------------------------------------------------------------
 MAPEO_AREA_OVERRIDE_POR_PLC = {
     "Calderas_8_9_10_Desaireador": {"DES": "300"},
+    # Decisión explícita del usuario (23/09/2026): identidades/prefijos Mieles
+    # TK_MIEL*, *MIEL_CENT*, *MIEL_RICA* y FLEX5000_MIELES pertenecen al área 700.
+    "FABRICA": {"MIEL": "700", "MIELES": "700"},
 }
+
+PROGRAMAS_AREA_PENDIENTE_USUARIO = {"SULFO_ENCALADO"}
+INSTANCIAS_AREA_PENDIENTE_USUARIO = {
+    "COC_LC_MELADO_T", "CONTROL_PRESION_BIO", "CONTROL_CAUDAL_JUGO_DEST",
+}
+
+
+def area_pendiente_por_decision(programa, instancia):
+    """Bloquea la asignación de área para los casos que el usuario dejó en espera."""
+    return (str(programa or "").upper() in PROGRAMAS_AREA_PENDIENTE_USUARIO or
+            str(instancia or "").upper() in INSTANCIAS_AREA_PENDIENTE_USUARIO)
 
 
 def mapeo_area_para_plc(nombre_archivo):
@@ -1369,6 +1383,42 @@ _CONTROL_PINES = {'CONTROL_NIVEL': ('PV', ('MV',)), 'PIDE': ('PV', ('CVEU',)),
                   'PID': ('PV', ('CV',))}
 
 
+def _especificacion_control(topologia, nodo):
+    """Return the audited process/input and command/output pins for a controller.
+
+    Native PID/PIDE instructions have fixed public pins.  Plant AOIs are more
+    varied: the L5X files in this project use names such as PIDE01,
+    CONTROL_PRESION, CONTROL_NIVEL_3_ELEMENTOS and PID_PREPARACION_CANA, and
+    their command can be exposed as MV, MV_VALV_NC/MV_VALV_NA or OUT.
+
+    An AOI is accepted only when its *definition in the same L5X* proves the
+    pin directions.  Name matching alone never creates a controller.
+    """
+    kind = nodo.get('kind', '')
+    tipo = nodo.get('Type', nodo.get('Name', '')).upper()
+    if kind == 'Block':
+        return _CONTROL_PINES.get(tipo)
+    if kind != 'AddOnInstruction':
+        return None
+
+    definition = topologia['aoi_definiciones'].get(nodo.get('Name'), {})
+    controller_name = (tipo.startswith(('CONTROL', 'CTRL', 'PID', 'PIDE')) or
+                       re.search(r'(?:^|_)(?:CONTROL|CTRL|PID|PIDE)(?:_|$)', tipo))
+    if not definition or not controller_name:
+        return None
+    if definition.get('PV', {}).get('Usage') != 'Input':
+        return None
+
+    preferred = ('MV', 'CVEU', 'CV', 'OUT')
+    outputs = [pin for pin in preferred
+               if definition.get(pin, {}).get('Usage') == 'Output']
+    if not outputs:
+        outputs = sorted(pin for pin, spec in definition.items()
+                         if spec.get('Usage') == 'Output'
+                         and re.match(r'^(?:MV|CV|OUT)(?:_|$)', pin, re.I))
+    return ('PV', tuple(outputs)) if outputs else None
+
+
 def _identidad(top, program, operand):
     """Resolve declaration scope without collapsing program-local names."""
     if operand.startswith('Program:') and '.' in operand:
@@ -1413,8 +1463,8 @@ def extraer_lazos_control(topologia, area_defecto=None):
         nodes, wires = h['nodos'], h['wires']
         program = h['scope'][1]
         for nid, ctrl in nodes.items():
-            typ = ctrl.get('Type', ctrl.get('Name', '')).upper()
-            if typ not in _CONTROL_PINES:
+            specification = _especificacion_control(top, ctrl)
+            if specification is None:
                 continue
             name = ctrl.get('Operand', '')
             group = {'id': h['scope'] + (nid,), 'controlador': name,
@@ -1425,12 +1475,7 @@ def extraer_lazos_control(topologia, area_defecto=None):
                 if op and not _RE_LITERAL.fullmatch(op):
                     group['miembros'][op] = _identidad(top, program, op)
             add(name)
-            pvpin, outpins = _CONTROL_PINES[typ]
-            if ctrl['kind'] == 'AddOnInstruction':
-                params = top['aoi_definiciones'].get(ctrl.get('Name'), {})
-                if (params.get(pvpin, {}).get('Usage') != 'Input' or
-                    any(params.get(p, {}).get('Usage') != 'Output' for p in outpins)):
-                    group['problemas'].append('Definicion AOI/pines no verificados')
+            pvpin, outpins = specification
             def trace(node_id, pin, upstream, seen):
                 marker = (node_id, pin, upstream)
                 if marker in seen:
@@ -1467,6 +1512,9 @@ def extraer_lazos_control(topologia, area_defecto=None):
             mvs = []
             for p in active_outputs:
                 mvs += trace(nid, p, False, set())
+            group['entradas_proceso'] = list(dict.fromkeys(pvs))
+            group['salidas_control'] = list(dict.fromkeys(mvs))
+            group['pines_salida_activos'] = list(active_outputs)
             if len(pvs) != 1 or len(mvs) != 1:
                 group['problemas'].append('PV/MV no unívocos')
             if len(pvs) == 1:
@@ -1489,24 +1537,29 @@ def extraer_lazos_control(topologia, area_defecto=None):
             # C is justified by the control call. I requires literal IC evidence.
             codes = {t for t in re.split(r'[_\-.]', name.upper()) if t in ISA_VALIDOS and t.endswith('IC')}
             group['funciones'][name] = 'IC' if codes == {str(group['variable']) + 'IC'} else 'C'
-            areas = set()
-            mapping = mapeo_area_para_plc(top['archivo'])
-            for op in group['miembros']:
-                match = re.match(r'^(\d{3})_[A-Z]+_\d+$', op)
-                if match:
-                    areas.add(match.group(1))
-                areas.update(mapping[t] for t in re.split(r'[_\-.]', op.upper()) if t in mapping)
-            if not areas:
-                for container in h['scope'][1:3]:
-                    areas.update(mapping[t] for t in re.split(r'[_\-.]', container.upper()) if t in mapping)
-            if not areas:
-                default = area_defecto or area_defecto_para(top['archivo'])
-                if default:
-                    areas.add(default)
-            if len(areas) == 1:
-                group['area'] = areas.pop()
+            if area_pendiente_por_decision(program, name):
+                group['area'] = None
+                group['problemas'].append(
+                    'Area pendiente por decisión de usuario; no asignar: %s/%s' % (program, name))
             else:
-                group['problemas'].append('Area ausente/ambigua')
+                areas = set()
+                mapping = mapeo_area_para_plc(top['archivo'])
+                for op in group['miembros']:
+                    match = re.match(r'^(\d{3})_[A-Z]+_\d+$', op)
+                    if match:
+                        areas.add(match.group(1))
+                    areas.update(mapping[t] for t in re.split(r'[_\-.]', op.upper()) if t in mapping)
+                if not areas:
+                    for container in h['scope'][1:3]:
+                        areas.update(mapping[t] for t in re.split(r'[_\-.]', container.upper()) if t in mapping)
+                if not areas:
+                    default = area_defecto or area_defecto_para(top['archivo'])
+                    if default:
+                        areas.add(default)
+                if len(areas) == 1:
+                    group['area'] = areas.pop()
+                else:
+                    group['problemas'].append('Area ausente/ambigua')
             loops.append(group)
     users = defaultdict(list)
     for group in loops:

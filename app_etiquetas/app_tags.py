@@ -50,11 +50,18 @@ ROJO_PELIGRO_HOVER = "#7D0016"
 
 # Diccionarios de mapeo para la lectura humana del tag (Paso 2).
 MAPEO_AREAS = {
-    "000": "Recepción y Preparación de Caña",
+    "000": "Recepción y Preparación de Caña (Desfibrador)",
     "100": "Molienda",
     "200": "Destilería",
-    "300": "Calderas",
-    "950": "Tratamiento de Agua y Servicios",
+    "250": "Biodestilería",
+    "300": "Calderas / Generación de Vapor",
+    "400": "Clarificación y Encalado",
+    "500": "Evaporación",
+    "600": "Cocimiento / Tachos",
+    "700": "Centrifugado / Purga",
+    "800": "Secado y Envase",
+    "900": "Fuerza Motriz / Turbogeneradores",
+    "950": "Tratamiento de Agua y Servicios (Ósmosis)",
 }
 MAPEO_VARIABLES = {
     "L": "Nivel", "P": "Presión", "T": "Temperatura", "F": "Caudal",
@@ -63,9 +70,40 @@ MAPEO_VARIABLES = {
 }
 MAPEO_FUNCIONES = {
     "T": "Transmisor", "IT": "Transmisor Indicador", "C": "Controlador", "IC": "Controlador Indicador",
-    "V": "Válvula", "I": "Indicador", "R": "Registrador", "G": "Mirilla/Visor",
+    "V": "Válvula", "XV": "Válvula Todo/Nada", "I": "Indicador", "R": "Registrador", "G": "Mirilla/Visor",
     "S": "Switch", "H": "Alta", "L": "Baja",
 }
+
+# PLC origen -> IP verificada en `data_historica/inventario_plcs_20260722_093248.xlsx - PLCs.csv`
+# (nombre de programa + PLC (path)) y en `variables plc programa yanco/inventario_plcs_*.xlsx`.
+# La grilla muestra solo los dos últimos octetos para conservar ancho. Cuando un mismo programa
+# corre en dos controladores redundantes se declaran ambos (195/196, 251/252, 118/119).
+IP_POR_PLC = {
+    "DESTILERIA": "192.168.10.128",
+    "FABRICA": "192.168.10.118 / 192.168.10.119",
+    "CALDERAS_8_9_10_DESAIREADOR": "192.168.10.195 / 192.168.10.196",
+    "TRAPICHE2022": "192.168.10.99",
+    "DIBACCO": "192.168.10.170",
+    "CENIZAS2020": "192.168.10.126",
+    "CENTRIFUGA_DE_PRIMERA": "192.168.10.50",
+    "CALD_LA_FLORIDA": "192.168.10.251 / 192.168.10.252",
+    "PAINEL_CTR_TURB_MOENDA": "192.168.10.174",
+    "LA_FLORIDA": "192.168.10.160",
+    "USINA_LA_FLORIDA": "192.168.10.13",
+}
+
+
+def plc_para_tabla(plc_origen):
+    """Devuelve los últimos dos octetos de la IP; sin inventario verificable, nombre corto."""
+    nombre = str(plc_origen or "").strip()
+    if not nombre:
+        return "—"
+    ip = IP_POR_PLC.get(nombre.upper(), "")
+    if not ip:
+        return nombre[:12]
+    return " / ".join(".".join(parte.split(".")[-2:]) for parte in ip.split(" / "))
+
+
 DICCIONARIOS = {
     "areas": MAPEO_AREAS,
     "variables": MAPEO_VARIABLES,
@@ -182,6 +220,47 @@ def generar_tag_plc(tag_oficial):
     if tag_oficial and tag_oficial[0].isdigit():
         return "_" + tag_oficial
     return tag_oficial
+
+
+def exportar_workbook_tags(ruta, columnas, filas, indice_tag):
+    """Crea el Excel común a búsqueda rápida y expandida.
+
+    La advertencia amarilla siempre queda visible, el encabezado en fila 3, datos desde fila 4
+    y `Tag_Studio5000` amarillo de encabezado a último dato.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    columna_studio = "Tag_Studio5000"
+    if columnas.count(columna_studio) != 1:
+        raise ValueError("La exportación requiere exactamente una columna Tag_Studio5000")
+    if not filas:
+        raise ValueError("La exportación requiere al menos una fila")
+    amarillo = PatternFill(fill_type="solid", fgColor="FFF2CC")
+    libro = Workbook()
+    hoja = libro.active
+    ultima_columna = len(columnas)
+    hoja.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ultima_columna)
+    banner = hoja.cell(1, 1, "La columna pintada de amarillo (Tag_Studio5000) es el tag que se debe poner en Studio 5000.")
+    banner.fill = amarillo
+    banner.font = Font(bold=True)
+    banner.alignment = Alignment(wrap_text=True)
+    hoja.row_dimensions[1].height = 30
+    for columna, valor in enumerate(columnas, start=1):
+        celda = hoja.cell(3, columna, valor)
+        celda.font = Font(bold=True)
+        if valor == columna_studio:
+            celda.fill = amarillo
+    for fila_excel, fila in enumerate(filas, start=4):
+        valores = [fila[columna] for columna in columnas if columna != columna_studio]
+        valores.insert(indice_tag + 1, generar_tag_plc(fila["tag_completo"]))
+        for columna, valor in enumerate(valores, start=1):
+            celda = hoja.cell(fila_excel, columna, valor)
+            if columna == indice_tag + 2:
+                celda.fill = amarillo
+    hoja.freeze_panes = "A4"
+    libro.save(ruta)
+    return ruta
 
 
 class TagGovernanceApp(tb.Window):
@@ -887,8 +966,8 @@ class TagGovernanceApp(tb.Window):
         detalle.bind("<Configure>", self._ajustar_ancho_lectura_reciente)
         self.detalle_placeholder = ttk.Label(detalle, text="Seleccione un tag de la lista para ver su detalle", style="secondary.TLabel", wraplength=450)
         self.detalle_placeholder.grid(row=2, column=0, columnspan=2, sticky="w", pady=8)
-        self.detalle_vars = {clave: tk.StringVar(value="—") for clave in ("tag_completo", "descripcion", "estado", "ubicacion", "fabricante", "modelo", "rango_medicion", "unidad", "tipo_senal", "entrada_salida", "fluido_proceso", "creado_por", "fecha_creacion")}
-        etiquetas = (("tag_completo", "Tag"), ("descripcion", "Descripción"), ("estado", "Estado"), ("ubicacion", "Ubicación física"), ("fabricante", "Fabricante"), ("modelo", "Modelo"), ("rango_medicion", "Rango"), ("unidad", "Unidad"), ("tipo_senal", "Tipo de Señal"), ("entrada_salida", "Entrada/Salida"), ("fluido_proceso", "Fluido/Product"), ("creado_por", "Registrado por"), ("fecha_creacion", "Fecha de creación"))
+        self.detalle_vars = {clave: tk.StringVar(value="—") for clave in ("tag_completo", "descripcion", "comentarios", "estado", "ubicacion", "fabricante", "modelo", "rango_medicion", "unidad", "tipo_senal", "entrada_salida", "fluido_proceso", "creado_por", "fecha_creacion")}
+        etiquetas = (("tag_completo", "Tag"), ("descripcion", "Descripción"), ("comentarios", "Procedencia (Migrado de)"), ("estado", "Estado"), ("ubicacion", "Ubicación física"), ("fabricante", "Fabricante"), ("modelo", "Modelo"), ("rango_medicion", "Rango"), ("unidad", "Unidad"), ("tipo_senal", "Tipo de Señal"), ("entrada_salida", "Entrada/Salida"), ("fluido_proceso", "Fluido/Product"), ("creado_por", "Registrado por"), ("fecha_creacion", "Fecha de creación"))
         for fila, (clave, titulo) in enumerate(etiquetas, start=3):
             ttk.Label(detalle, text=f"{titulo}:", style="secondary.TLabel").grid(row=fila, column=0, sticky="nw", padx=(0, 8), pady=1)
             ttk.Label(detalle, textvariable=self.detalle_vars[clave], wraplength=360).grid(row=fila, column=1, sticky="nw", pady=1)
@@ -1015,12 +1094,12 @@ class TagGovernanceApp(tb.Window):
         self.lbl_lectura_expandida.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         self.lbl_lectura_expandida.grid_remove()
         buscar.bind("<Configure>", self._ajustar_ancho_lectura_expandida)
-        columnas=("tag","estado","tipo_senal","io","fluido","fecha","descripcion")
+        columnas=("tag","estado","plc","tipo_senal","io","fluido","fecha","descripcion")
         self.tree_tags = ttk.Treeview(
             buscar, columns=columnas, show="headings", selectmode="extended",
             style="Expanded.Treeview",
         )
-        for col,title,width in (("tag","Tag",150),("estado","Estado",110),("tipo_senal","Tipo de Señal",110),("io","Entrada/Salida",120),("fluido","Fluido/Product",130),("fecha","Fecha/Hora creación",150),("descripcion","Descripción/Alias",350)):
+        for col,title,width in (("tag","Tag",150),("estado","Estado",110),("plc","PLC",100),("tipo_senal","Tipo de Señal",110),("io","Entrada/Salida",120),("fluido","Fluido/Product",130),("fecha","Fecha/Hora creación",150),("descripcion","Descripción/Alias",350)):
             self.tree_tags.heading(col,text=title); self.tree_tags.column(col,width=width,anchor="w")
         self.tree_tags.grid(row=2,column=0,columnspan=2,sticky="nsew")
         self.tree_tags.bind("<<TreeviewSelect>>", self._actualizar_contador_seleccion_expandida)
@@ -1247,7 +1326,6 @@ class TagGovernanceApp(tb.Window):
 
     def exportar_seleccionados_recientes(self):
         """Exporta exclusivamente la selección del Treeview de recientes."""
-        from openpyxl import Workbook
 
         tags = self.tree_recientes.selection()
         if not tags:
@@ -1277,14 +1355,7 @@ class TagGovernanceApp(tb.Window):
         os.makedirs(carpeta, exist_ok=True)
         ruta = os.path.join(carpeta, f"tags_recientes_{time.strftime('%Y%m%d_%H%M%S')}.xlsx")
 
-        libro = Workbook()
-        hoja = libro.active
-        hoja.append(columnas)
-        for fila in filas:
-            valores = [fila[columna] for columna in columnas if columna != columna_studio]
-            valores.insert(indice_tag + 1, generar_tag_plc(fila["tag_completo"]))
-            hoja.append(valores)
-        libro.save(ruta)
+        exportar_workbook_tags(ruta, columnas, filas, indice_tag)
         messagebox.showinfo(
             "Exportación completada",
             f"{len(filas)} tags exportados correctamente.\n\nArchivo: {ruta}",
@@ -1437,7 +1508,8 @@ class TagGovernanceApp(tb.Window):
             entrada_salida = f["entrada_salida"] or "N/D"
             tags_fila = ("retirado",) if f["estado"] == "Retirado" else ()
             self.tree_tags.insert("", tk.END, iid=f["tag_completo"], values=(
-                f["tag_completo"], f["estado"], tipo_senal, entrada_salida,
+                f["tag_completo"], f["estado"], plc_para_tabla(f["plc_origen"]),
+                tipo_senal, entrada_salida,
                 f["fluido_proceso"] or "", f["fecha_creacion"] or "",
                 f["descripcion"] or "",
             ), tags=tags_fila)
@@ -1517,6 +1589,7 @@ class TagGovernanceApp(tb.Window):
                 "", tk.END, iid=registro["tag_completo"],
                 values=(
                     registro["tag_completo"], registro.get("estado") or "",
+                    plc_para_tabla(registro.get("plc_origen")),
                     tipo_senal, entrada_salida, registro.get("fluido_proceso") or "",
                     registro.get("fecha_creacion") or "", registro.get("descripcion") or "",
                 ), tags=tags_fila,
@@ -1544,7 +1617,7 @@ class TagGovernanceApp(tb.Window):
             self.tree_tags.selection_remove(self.tree_tags.selection())
             self.tree_tags.insert(
                 "", tk.END, iid=sentinel,
-                values=("Sin resultados para la búsqueda", "", "", "", "", "", ""),
+                values=("Sin resultados para la búsqueda", "", "", "", "", "", "", ""),
                 tags=("sin_resultados",),
             )
         self._actualizar_contador_seleccion_expandida(
@@ -2158,7 +2231,6 @@ class TagGovernanceApp(tb.Window):
 
     def on_exportar_excel(self):
         """Exporta los tags seleccionados del buscador (Paso 5) a un Excel."""
-        from openpyxl import Workbook
 
         tags = self.tree_tags.selection()
         if not tags:
@@ -2192,15 +2264,7 @@ class TagGovernanceApp(tb.Window):
         os.makedirs(carpeta, exist_ok=True)
         ruta = os.path.join(carpeta, f"tags_{time.strftime('%Y%m%d_%H%M%S')}.xlsx")
 
-        wb = Workbook()
-        ws = wb.active
-        ws.append(columnas)
-        for fila in filas:
-            studio = generar_tag_plc(fila["tag_completo"])
-            valores = [fila[c] for c in columnas if c != columna_studio]
-            valores.insert(idx_tag + 1, studio)
-            ws.append(valores)
-        wb.save(ruta)
+        exportar_workbook_tags(ruta, columnas, filas, idx_tag)
 
         messagebox.showinfo("Exportación completada", f"{len(filas)} tags exportados correctamente")
 

@@ -1,0 +1,66 @@
+Leé primero el archivo de contexto y obedecelo como fuente de verdad:
+
+C:\Users\Administrador\Downloads\AUTOMATISMO_AGUSTIN\docs\Contexto_Handoff_160926.md
+
+PROYECTO
+Estandarización ISA-5.1 del Ingenio La Florida.
+Directorio de trabajo: C:\Users\Administrador\Downloads\AUTOMATISMO_AGUSTIN
+Intérprete Python correcto (el del PATH NO sirve):
+C:/Users/Administrador/AppData/Local/Programs/Python/Python313/python.exe
+
+REGLAS PERMANENTES (no negociables)
+1. Trabajar únicamente dentro del directorio del proyecto.
+2. SQLite SIEMPRE solo lectura: URI mode=ro + PRAGMA query_only=ON + cierre explícito de conexiones.
+3. Salidas EXCLUSIVAMENTE en CSV. Nunca escribir en bases. Nunca migrar. Nunca purgar.
+4. NO asignar números ISA definitivos ni insertar nada sin mi autorización explícita.
+5. No tocar los 11 tags manuales de producción.
+6. Ante ambigüedad: bloquear y reportar honestamente, nunca inventar un resultado.
+7. Distinguir siempre: declaración ≠ invocación XML ≠ ejecución runtime.
+
+ESTADO ACTUAL (verificado el 16/09/2026)
+- DB producción app_etiquetas/tags_ingenio.db: 11 tags.
+  SHA-256 c450eb3f017a7f51636aaca8df5194f9385b084f05a6ac0450902738c384ca17
+- Backup histórico de 693 tags:
+  SHA-256 ee1df1c901f254bd1a97785a709f3ee154c0ac0503657866d536d1325778c440
+- Suite: 85 tests OK · compileall OK · git diff --check OK
+- Cero escrituras SQLite en todas las auditorías.
+
+TRES LAZOS APROBADOS PARA NUMERACIÓN
+1) Calderas_8_9_10_Desaireador / Program:DES / DES_LC_DESAIREADOR
+   Controlador B_DES_LC_DOMO (AOI CONTROL_NIVEL)
+   Entrada DES_S1_LT_TK_DESAIREADOR → salida DES_S6_PV_VALVULA_EVACUACION_DES
+   Área 300, variable L
+2) DESTILERIA / Program:FERMENTACION / PID_FERMENTACION
+   Controlador B_Ctrol_FT_AGUA_A_MOSTO
+   Entrada Slot_FT_AGUA → salida Slot_PV_VALVULA_CAUDAL_AGUA
+   Área 200, variable F
+3) DESTILERIA / Program:FERMENTACION / PID_FERMENTACION
+   Controlador B_Ctrol_TK_AGUA_POTABLE
+   Entrada Slot_LT_TK_AGUA_POTABLE → salida Slot_PV_VALVULA_NIVEL_TK_AGUA
+   Área 200, variable L
+
+PROPUESTA VIGENTE — PENDIENTE DE TU REVISIÓN, NO INSERTADA
+Archivo: exports/propuesta_numeracion_3_lazos.csv
+9 tags, 3 por lazo, mismo número dentro de cada lazo:
+  Área 300 número 083 → 300_LT_083, 300_LIC_083, 300_LV_083
+  Área 200 número 081 → 200_FT_081, 200_FIC_081, 200_FV_081
+  Área 200 número 082 → 200_LT_082, 200_LIC_082, 200_LV_082
+Verificaciones ya realizadas y documentadas en el CSV:
+  - Área 300 del desaireador confirmada documentalmente (Manual de Estandarización,
+    Roadmap, Manual_Mantenimiento_Codigo, inventarios online .195/.196).
+  - 083/081/082 libres contra los 11 manuales, contra los otros dos lazos propuestos
+    y contra los identificadores vigentes de los inventarios online.
+  - Coincidencias con el histórico retirado registradas aparte, sin tratarlas
+    como ocupación actual.
+OJO: src/propuesta_historica_lazos.py escribe ese MISMO nombre de archivo con otro
+esquema. Si lo ejecutás, sobrescribe la propuesta de 9 tags. Resguardá el CSV antes.
+
+TAREA
+Revisá la propuesta de 9 tags conmigo. Mostrame el CSV y las verificaciones.
+No insertes nada, no escribas en SQLite y no asignes números definitivos hasta que
+yo lo autorice expresamente. Si encontrás un problema en las verificaciones,
+señalalo con la evidencia concreta en vez de corregirlo en silencio.
+
+Nota honesta pendiente: la revisión independiente del CSV de 9 tags NO se completó
+(el revisor falló por límite de uso HTTP 429). Las verificaciones actuales son del
+agente principal. Decímelo si lo preguntás, no lo presentes como revisión externa.
