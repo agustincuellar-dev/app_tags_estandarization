@@ -40,7 +40,7 @@ el bloque del programa). Con la respuesta se define la identidad real y el canal
    Identidad A (alias) : Slot_TT_BOBINA_MOTOR_ROLO_NORTE_1_MOL
    Identidad B (bloque): escribe TT_BOBINA_MOTOR_ROLO_1_MOL (mismo Pt100, sin la palabra NORTE)
    PREGUNTA: confirmas que TT_BOBINA_MOTOR_ROLO_1_MOL y ..._NORTE_1_MOL son el mismo instrumento?
-   Si si => se crea 100_TT_057 inmediatamente.
+   Si si => se crea un solo tag de variable T en el area 100 (proximo libre hoy: 100_TT_008).
 
 5) DESTILERIA (area 200) - canal jw_fermerntacion_2022:2:I.Ch2Data
    Programa/Rutina FBD : JW / ESCLADOS_PT_FT_LT_TT
@@ -90,7 +90,7 @@ QUE PASA CON CADA RESPUESTA
  Canales 1, 2, 3, 5, 6, 7 -> con la identidad confirmada se crea 1 tag por canal (el numero libre
    ya esta reservado en exports\plan_maestro_consolidado_v5_homologado_290926.csv).
  Canal 4 -> si es el mismo Pt100 se crea 1 solo tag: 100_TT_057.
- Canal 8 -> si la bomba 10 existe se reserva 300_ST_075; si no existe se borra el alias del PLC.
+ Canal 8 -> si la bomba 10 existe se reserva un tag de variable S en el area 300 (proximo libre hoy: 300_ST_038); si no existe se borra el alias del PLC.
 
 ORIGEN DE LOS 3 .ACD COPIADOS (copias verificadas byte a byte, SHA-256 copia == original)
  1) ACD_Para_Convertir/ACD_Para_Convertir - hechos/TRAPICHE2022/TRAPICHE2022...BAK031.acd

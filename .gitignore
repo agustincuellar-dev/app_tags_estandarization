@@ -1,3 +1,4 @@
+# --- Datos de trabajo (fuera del repositorio) ---
 exports/
 build/
 dist/
@@ -8,3 +9,33 @@ __pycache__/
 github_pusher.py
 probar_lazo.py
 *.log
+
+# --- Studio 5000 / PLC: binarios que git no debe versionar ---
+*.ACD
+*.acd
+*.BAK
+*.bak
+*.L5X
+*.l5x
+*.RSS
+*.zip
+*.rar
+*.7z
+*.exe
+*.msi
+*.iso
+
+# --- Carpetas pesadas de trabajo ---
+archivo_ordenado/
+ACD_Para_Convertir/
+p pasar/
+data_historica/
+auto_agustin/
+archivos ACD y L5X auditados/
+SIMULADORES/
+TABLEROS/
+L5X_Produccion/
+30.00.00-Studio5000-DVD/
+Matlab R2013a Portable/
+PIDBasics.exe/
+GPT 5.6 SOL/
