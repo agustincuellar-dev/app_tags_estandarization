@@ -34,8 +34,8 @@ except Exception:
     _PIL_OK = False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOGO_HEADER = os.path.join(BASE_DIR, "logo_header.png")
 LOGO_BALCANES = os.path.join(BASE_DIR, "logo_balcanes.png")
+LOGO_APP = os.path.join(BASE_DIR, "logo_app_tags.png")      # logo nuevo (master 512 px)
 LOGO_APP_ICO = os.path.join(BASE_DIR, "logo_app_tags.ico")
 ICONO_APP = os.path.join(BASE_DIR, "app_tags.ico")
 
@@ -102,6 +102,51 @@ def plc_para_tabla(plc_origen):
     if not ip:
         return nombre[:12]
     return " / ".join(".".join(parte.split(".")[-2:]) for parte in ip.split(" / "))
+
+
+# Controladores que el taller puede elegir en el Paso 2, con la misma
+# grafía que está persistida en tags.plc_origen (la de los .ACD/.L5X del
+# proyecto). El orden sigue el uso habitual en planta.
+PLCS_DISPONIBLES = (
+    "DESTILERIA",
+    "TRAPICHE2022",
+    "Calderas_8_9_10_Desaireador",
+    "cenizas2020",
+    "FABRICA",
+    "DIBACCO",
+    "CALD_LA_FLORIDA",
+    "USINA_LA_FLORIDA",
+    "CENTRIFUGA_DE_PRIMERA",
+    "Painel_Ctr_Turb_Moenda",
+)
+
+
+def etiqueta_plc(valor):
+    """Etiqueta visible del selector de PLC: 'DESTILERIA (IP: 10.128)'.
+
+    Sin IP en el inventario verificado se muestra sólo el nombre del PLC:
+    nunca se inventa un número de red.
+    """
+    nombre = str(valor or "").strip()
+    if not nombre:
+        return ""
+    if IP_POR_PLC.get(nombre.upper()):
+        return f"{nombre} (IP: {plc_para_tabla(nombre)})"
+    return nombre
+
+
+def valor_plc(etiqueta, catalogo):
+    """Valor persistible (tags.plc_origen) de una etiqueta del selector.
+
+    Devuelve "" sin selección: el campo es opcional, como el resto de los
+    datos del Paso 2.
+    """
+    texto = str(etiqueta or "").strip()
+    if not texto:
+        return ""
+    if texto in catalogo:
+        return catalogo[texto]
+    return texto.split(" (IP:")[0].strip()
 
 
 DICCIONARIOS = {
@@ -290,6 +335,20 @@ class TagGovernanceApp(tb.Window):
             "LecturaTag.TLabel", foreground="#FFFFFF", font=("Segoe UI", 15, "bold"),
             anchor="center", justify="center", padding=(12, 10),
         )
+        # CTA principal del Paso 1: 'SIGUIENTE' en ámbar corporativo con
+        # texto azul oscuro y cuerpo algo mayor, para que la vista caiga
+        # ahí al terminar de configurar el tag. Deshabilitado vuelve a
+        # gris: el color avisa que la propuesta todavía no está lista.
+        self.app_style.configure(
+            "SiguienteCTA.TButton", background=AMBAR, foreground=AZUL,
+            font=("Segoe UI", 13, "bold"), padding=(26, 12),
+            borderwidth=1, anchor="center",
+        )
+        self.app_style.map(
+            "SiguienteCTA.TButton",
+            background=[("disabled", "#4A4A4A"), ("pressed", "#E0A400"), ("active", "#FFD34D")],
+            foreground=[("disabled", "#8C8C8C"), ("pressed", AZUL), ("active", AZUL)],
+        )
         self._aplicar_identidad()
 
         db.init_db()
@@ -299,6 +358,15 @@ class TagGovernanceApp(tb.Window):
         self.variables = {f"{v['letra']} - {v['nombre']}": v for v in db.listar_variables()}
         self.funciones = {f"{f['letra']} - {f['nombre']}": f for f in db.listar_funciones()}
         self.usuarios = [u["nombre"] for u in db.listar_usuarios()]
+
+        # Selector 'PLC de Origen' del Paso 2: etiqueta visible -> valor
+        # persistido. Se parte de la lista curada de controladores y se
+        # agrega cualquier valor ya presente en la base (bases importadas
+        # o grafías heredadas) para que el modo edición nunca lo pierda.
+        self.plcs_ui = {etiqueta_plc(v): v for v in PLCS_DISPONIBLES}
+        for valor in db.listar_plcs_origen():
+            self.plcs_ui.setdefault(etiqueta_plc(valor), valor)
+        self.plcs_opciones = list(self.plcs_ui)
 
         self.tag_propuesto = None
         self.numero_propuesto = None
@@ -448,34 +516,16 @@ class TagGovernanceApp(tb.Window):
         """Compatibilidad con los bindings existentes del scroll de página."""
         self._on_mousewheel(event)
 
-    def _agregar_logo_header(self, parent):
-        """Carga el logo (logo_app_tags.ico) en el encabezado usando PIL.
-        Se guarda la referencia en self.logo_img para evitar que el garbage
-        collector lo elimine. Si PIL o el archivo faltan, se omite."""
-        if not _PIL_OK or not os.path.isfile(LOGO_APP_ICO):
-            return
-        try:
-            with Image.open(LOGO_APP_ICO) as origen:
-                pil = origen.resize((80, 80), Image.Resampling.LANCZOS)
-            self.logo_img = ImageTk.PhotoImage(pil)
-            tk.Label(parent, image=self.logo_img, bg="white").pack(
-                side="left", padx=(0, 14)
-            )
-        except Exception:
-            self.logo_img = None
-
     def _construir_cabecera(self):
         """Banda superior, todo agrupado a la izquierda y en un solo
         renglón consecutivo: logo corporativo (Los Balcanes S.A., más
         grande porque tiene texto propio que tiene que leerse) primero,
-        después el logo + nombre de la app."""
+        después el logo de la app + su nombre."""
         cabecera = tk.Frame(self.header_frame, bg="white")
         cabecera.pack(fill="x", side="top")
 
         interior = tk.Frame(cabecera, bg="white")
         interior.pack(fill="x", pady=(10, 8), padx=16)
-
-        self._agregar_logo_header(interior)
 
         bloque_izq = tk.Frame(interior, bg="white")
         bloque_izq.pack(side="left")
@@ -493,13 +543,17 @@ class TagGovernanceApp(tb.Window):
             # Filete vertical fino que separa "la empresa dueña" de "la app"
             tk.Frame(bloque_izq, bg="#DDDDDD", width=1).pack(side="left", fill="y", padx=(0, 14), pady=4)
 
-        # --- Logo + nombre de la app (ambos opcionales; si falta el
-        # PNG, se muestra solo el texto) ---
+        # --- Logo de la app (logoo nuevo) + nombre. El PNG master se
+        # reduce con PIL para que quede nítido en el encabezado. ---
         self.img_logo = None
         try:
-            self.img_logo = tk.PhotoImage(file=LOGO_HEADER)
-        except tk.TclError:
-            pass
+            if _PIL_OK and os.path.isfile(LOGO_APP):
+                with Image.open(LOGO_APP) as origen:
+                    pil = origen.convert("RGBA").resize((60, 60), Image.Resampling.LANCZOS)
+                self.img_logo = ImageTk.PhotoImage(pil)
+                self.logo_img = self.img_logo
+        except Exception:
+            self.img_logo = None
 
         if self.img_logo is not None:
             tk.Label(bloque_izq, image=self.img_logo, bg="white").pack(side="left", padx=(0, 12))
@@ -914,7 +968,7 @@ class TagGovernanceApp(tb.Window):
         acciones.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         ttk.Button(acciones, text="Eliminar tag seleccionado", command=self.on_eliminar, style="danger.Outline.TButton").pack(side="left")
         ttk.Button(acciones, text="🔄 Limpiar", command=self.limpiar_formulario, style="secondary.TButton").pack(side="right", padx=(0, 8))
-        self.btn_siguiente = ttk.Button(acciones, text="SIGUIENTE →", command=self.ir_a_datos, style="success.TButton", state="disabled")
+        self.btn_siguiente = ttk.Button(acciones, text="SIGUIENTE →", command=self.ir_a_datos, style="SiguienteCTA.TButton", state="disabled")
         self.btn_siguiente.pack(side="right")
 
         # Panel derecho: lista superior (40%) y detalle integrado inferior (60%).
@@ -1072,7 +1126,14 @@ class TagGovernanceApp(tb.Window):
         ttk.Label(vista, text="Fluido / Producto").grid(row=7, column=2, sticky="w", pady=6)
         self.cb_fluido = ttk.Combobox(vista, values=["Alcohol 90°", "Alcohol 96°", "Agua pura", "Vapor"]); self.cb_fluido.grid(row=7, column=3, sticky="ew", pady=6)
         self.cb_datatype = ttk.Combobox(vista, values=["BOOL", "REAL", "INT", "DINT", "STRING"])
-        botones = ttk.Frame(vista); botones.grid(row=8, column=0, columnspan=4, sticky="ew", pady=24)
+        ttk.Label(vista, text="PLC de Origen").grid(row=8, column=0, sticky="w", pady=6)
+        self.cb_plc = ttk.Combobox(vista, values=self.plcs_opciones, state="readonly")
+        self.cb_plc.grid(row=8, column=1, sticky="ew", padx=(8, 16), pady=6)
+        ttk.Label(
+            vista, text="Controlador físico donde vive la señal (columna plc_origen).",
+            style="secondary.TLabel",
+        ).grid(row=8, column=2, columnspan=2, sticky="w", pady=6)
+        botones = ttk.Frame(vista); botones.grid(row=9, column=0, columnspan=4, sticky="ew", pady=24)
         ttk.Button(botones, text="← ATRÁS", command=self._volver_a_inicio_desde_datos, style="secondary.TButton").pack(side="left")
         self.btn_accion = ttk.Button(botones, text="GUARDAR TAG", command=self.on_guardar, style="success.TButton")
         self.btn_accion.pack(side="right")
@@ -1249,6 +1310,7 @@ class TagGovernanceApp(tb.Window):
         self.cb_tipo_senal.set("Desconocido")
         self.cb_io.set("N/D")
         self.cb_fluido.set("")
+        self.cb_plc.set("")
 
     def _volver_a_inicio_desde_datos(self):
         """Sale de edición sin contaminar el próximo flujo de creación."""
@@ -1539,6 +1601,7 @@ class TagGovernanceApp(tb.Window):
         self.cb_tipo_senal.set("Desconocido")
         self.cb_io.set("N/D")
         self.cb_fluido.set("")
+        self.cb_plc.set("")
         for e in self.entries.values():
             e.delete(0, tk.END)
         self._set_entry_tag("")
@@ -1910,6 +1973,10 @@ class TagGovernanceApp(tb.Window):
             self.cb_io.set(fila["entrada_salida"] or "N/D")
         except (IndexError, KeyError):
             self.cb_io.set("N/D")  # filas viejas sin columna entrada_salida
+        try:
+            self.cb_plc.set(etiqueta_plc(fila["plc_origen"]))
+        except (IndexError, KeyError):
+            self.cb_plc.set("")  # filas viejas sin columna plc_origen
 
         # Bg distinto en modo edicion (celeste claro) para que se note a
         # simple vista que ya no esta proponiendo un tag nuevo.
@@ -1959,6 +2026,7 @@ class TagGovernanceApp(tb.Window):
         rango_medicion = self.entries["rango_medicion"].get().strip()
         unidad = self.entries["unidad"].get().strip()
         creado_por = self.cb_usuario.get().strip()
+        plc_origen = valor_plc(self.cb_plc.get(), self.plcs_ui)
 
         descripcion = self.entry_descripcion.get().strip()
         if not descripcion:
@@ -1971,6 +2039,7 @@ class TagGovernanceApp(tb.Window):
         confirmar = messagebox.askyesno(
             "Confirmar actualización",
             f"¿Confirma la actualización del tag '{tag_completo}'?\n\n"
+            f"PLC de Origen: {plc_origen or '—'}\n"
             f"Descripción: {descripcion}\n"
             f"Estado: {self.cb_estado.get()}"
         )
@@ -1991,6 +2060,7 @@ class TagGovernanceApp(tb.Window):
             tipo_senal=self.cb_tipo_senal.get(),
             entrada_salida=self.cb_io.get(),
             fluido_proceso=self.cb_fluido.get().strip(),
+            plc_origen=plc_origen,
         )
 
         self.status.config(text=f"Tag '{tag_completo}' actualizado correctamente.")
@@ -2006,6 +2076,7 @@ class TagGovernanceApp(tb.Window):
         self.cb_tipo_senal.set("Desconocido")
         self.cb_io.set("N/D")
         self.cb_fluido.set("")
+        self.cb_plc.set("")
         self._salir_modo_edicion()
         self.actualizar_propuesta()
         self.refrescar_paso5()
@@ -2045,6 +2116,7 @@ class TagGovernanceApp(tb.Window):
         rango_medicion = self.entries["rango_medicion"].get().strip()
         unidad = self.entries["unidad"].get().strip()
         creado_por = self.cb_usuario.get().strip()
+        plc_origen = valor_plc(self.cb_plc.get(), self.plcs_ui)
         if not creado_por:
             messagebox.showerror(
                 "Usuario requerido",
@@ -2078,6 +2150,7 @@ class TagGovernanceApp(tb.Window):
             f"Área: {area['nombre']}\n"
             f"Variable: {variable['nombre']}\n"
             f"Función: {funcion['nombre']}\n"
+            f"PLC de Origen: {plc_origen or '—'}\n"
             f"Descripción: {descripcion}"
         )
         if not confirmar:
@@ -2102,6 +2175,7 @@ class TagGovernanceApp(tb.Window):
                 tipo_senal=self.cb_tipo_senal.get(),
                 entrada_salida=self.cb_io.get(),
                 fluido_proceso=self.cb_fluido.get().strip(),
+                plc_origen=plc_origen,
             )
         except ValueError as e:
             messagebox.showerror("No se pudo guardar", str(e))
@@ -2120,6 +2194,7 @@ class TagGovernanceApp(tb.Window):
         self.cb_tipo_senal.set("Desconocido")
         self.cb_io.set("N/D")
         self.cb_fluido.set("")
+        self.cb_plc.set("")
         self.lbl_propuesta.config(text="Tag propuesto: —", style="PropuestaTag.TLabel")
 
         # Refresca el Listbox, la búsqueda expandida y la lista de recientes.

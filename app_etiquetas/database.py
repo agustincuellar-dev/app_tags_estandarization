@@ -280,6 +280,23 @@ def listar_usuarios():
     return rows
 
 
+def listar_plcs_origen():
+    """Valores de plc_origen realmente en uso, ordenados alfabéticamente.
+
+    Alimenta el selector 'PLC de Origen' del Paso 2: la etiqueta visible
+    del combo se construye sobre el mismo texto que ya está persistido,
+    así guardar no crea variantes nuevas del nombre del PLC.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT DISTINCT plc_origen FROM tags "
+        "WHERE plc_origen IS NOT NULL AND TRIM(plc_origen) <> '' "
+        "ORDER BY plc_origen"
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
 def agregar_usuario(nombre):
     """Agrega un usuario al catálogo. Si ya existe (UNIQUE), no falla:
     simplemente lo deja como estaba. Devuelve True si se insertó uno nuevo."""
@@ -495,6 +512,7 @@ def crear_tag(
     tipo_senal="",
     entrada_salida="",
     fluido_proceso="",
+    plc_origen="",
 ):
     """Inserta un nuevo tag. La restricción UNIQUE de la tabla
     garantiza a nivel de base de datos que nunca habrá duplicados,
@@ -524,14 +542,16 @@ def crear_tag(
                 tag_completo, area_id, variable_id, funcion_id, numero_loop,
                 descripcion, ubicacion, fabricante, modelo,
                 rango_medicion, unidad, comentarios, estado, creado_por,
-                datatype, alias_for, tipo_senal, entrada_salida, fluido_proceso
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                datatype, alias_for, tipo_senal, entrada_salida, fluido_proceso,
+                plc_origen
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 tag_completo, area_id, variable_id, funcion_id, numero_loop,
                 descripcion, ubicacion, fabricante, modelo,
                 rango_medicion, unidad, comentarios, estado, creado_por,
                 datatype, alias_for, tipo_senal, entrada_salida, fluido_proceso,
+                plc_origen,
             ),
         )
         tag_id = cur.lastrowid
@@ -592,6 +612,7 @@ def actualizar_tag(
     tipo_senal="",
     entrada_salida="",
     fluido_proceso="",
+    plc_origen="",
 ):
     """Actualiza los datos editables de un tag YA EXISTENTE.
 
@@ -616,13 +637,13 @@ def actualizar_tag(
                 descripcion = ?, ubicacion = ?, fabricante = ?, modelo = ?,
                 rango_medicion = ?, unidad = ?, comentarios = ?, estado = ?,
                 datatype = ?, alias_for = ?, tipo_senal = ?, entrada_salida = ?,
-                fluido_proceso = ?, fecha_modificacion = ?
+                fluido_proceso = ?, plc_origen = ?, fecha_modificacion = ?
             WHERE id = ?
             """,
             (
                 descripcion, ubicacion, fabricante, modelo,
                 rango_medicion, unidad, comentarios, estado, datatype, alias_for,
-                tipo_senal, entrada_salida, fluido_proceso,
+                tipo_senal, entrada_salida, fluido_proceso, plc_origen,
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tag_id,
             ),
         )
