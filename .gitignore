@@ -1,10 +1,53 @@
-exports/
+# --- Python ---
+__pycache__/
+*.py[cod]
+.env
+venv/
+.venv/
+.pytest_cache/
+
+# --- Compilados ---
 build/
 dist/
-__pycache__/
-*.pyc
-*.pyo
-.env
+*.spec
+
+# --- Ejecutables y binarios pesados ---
+*.exe
+*.dll
+*.msi
+*.iso
+*.7z
+*.rar
+*.RAR
+*.zip
+*.ZIP
+*.ACD
+*.acd
+*.BAK
+*.bak
+*.L5X
+*.l5x
+*.RSS
+
+# --- Carpetas pesadas del proyecto ---
+L5X_Produccion/
+data_historica/
+archivo_ordenado/
+ACD_Para_Convertir/
+30.00.00-Studio5000-DVD/
+Matlab R2013a Portable/
+Matlab R2013a Portable.zip/
+PIDBasics.exe/
+GPT 5.6 SOL/
+
+# --- Datos del monitor (base, exportaciones, logs) ---
+datos/
+
+# --- Salidas intermedias ---
+exports/
+*.log
 github_pusher.py
 probar_lazo.py
-*.log
+
+# --- Temporales de comprobación ---
+_chk_*.png

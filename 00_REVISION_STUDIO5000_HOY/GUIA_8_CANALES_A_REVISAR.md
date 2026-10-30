@@ -33,9 +33,10 @@ Cómo usarla: abrí el `.ACD` del PLC indicado en Studio 5000, andá al programa
 
 ## Qué pasa con cada respuesta
 
-- Canales 1, 2, 3, 5, 6, 7 → con la identidad confirmada se crea **1 tag por canal** (el número libre ya está reservado en el plan `exports/plan_maestro_consolidado_v5_homologado_290926.csv`).
-- Canal 4 → si confirmás que es el mismo Pt100, se crea **1 solo tag** (`100_TT_nnn`, área 100).
-- Canal 8 → si la bomba 10 existe, se reserva un tag `300_ST_nnn` (variable S, área 300; próximo número libre hoy: `300_ST_038`); si no existe, se borra el alias del PLC.
+- Canales 1, 5, 6, 7 → con la identidad confirmada se crea **1 tag por canal** (el número libre se toma del plan vigente `exports/plan_maestro_puro_proceso_290926.csv`).
+- Canales 2 y 3 → **resueltos el 01/10/2026**: son caudalímetros de proceso y ya están en el catálogo como `100_FT_006` y `100_FT_007`.
+- Canal 4 → **fuera de alcance**: temperatura de bobina de motor (regla puro-proceso). No se crea tag.
+- Canal 8 → **fuera de alcance**: velocidad de bomba (`_ST_`, variable S). Sólo queda decidir si la bomba 10 existe: si no existe, se borra el alias del PLC; si existe, no se crea tag.
 
 ## Origen de los 3 .ACD copiados
 

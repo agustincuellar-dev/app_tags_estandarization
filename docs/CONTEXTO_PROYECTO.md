@@ -13,7 +13,7 @@ Documento de traspaso: alcanza para retomar el trabajo sin acceso a las sesiones
 4. [Entorno técnico](#4-entorno-técnico)
 5. [Arquitectura de la aplicación](#5-arquitectura-de-la-aplicación)
 6. [Modelo de datos](#6-modelo-de-datos)
-7. [El catálogo de 381 tags](#7-el-catálogo-de-381-tags)
+7. [El catálogo de 395 tags](#7-el-catálogo-de-395-tags)
 8. [Historia de los datos: 196 → 478 → 381](#8-historia-de-los-datos-196--478--381)
 9. [Reglas de numeración](#9-reglas-de-numeración)
 10. [Los 8 canales de revisión](#10-los-8-canales-de-revisión)
@@ -36,7 +36,7 @@ El trabajo de fondo de las últimas semanas fue **depurar el catálogo**: de un 
 
 | | |
 |---|---|
-| Base de datos | `app_etiquetas/tags_ingenio.db` — **381 tags**, 182 lazos, integridad `ok` |
+| Base de datos | `app_etiquetas/tags_ingenio.db` — **395 tags**, 195 lazos, integridad `ok` |
 | Aplicación | `app_etiquetas/app_tags.py` (2.569 líneas) + `database.py` (744 líneas) |
 | Ejecutable | `C:\Users\Administrador\Desktop\App Tags.exe` (69,0 MiB, logo nuevo) |
 | Repositorio | `github.com/agustincuellar-dev/app_tags_estandarization` (rama `main`) |
@@ -48,7 +48,7 @@ El trabajo de fondo de las últimas semanas fue **depurar el catálogo**: de un 
 
 | Aspecto | Valor |
 |---|---|
-| Tags | 381, todos en estado `Planificado` |
+| Tags | 395, todos en estado `Planificado` |
 | Lazos distintos | 182 |
 | Áreas con tags | 8 de 12 (000, 800 y 950 vacías) |
 | Variables | L 155 · P 105 · T 66 · F 47 · D 5 · W 2 · A 1 — **sin I, S ni V** |
@@ -145,7 +145,7 @@ Ocho tablas (`schema.sql`):
 
 | Tabla | Filas | Para qué |
 |---|---|---|
-| `tags` | 381 | el catálogo (23 columnas) |
+| `tags` | 395 | el catálogo (23 columnas) |
 | `areas` | 12 | códigos 000…950 con nombre y rango |
 | `variables` | 7 en uso (15 total) | letra ISA + nombre |
 | `funciones` | 29 | TT, FT, LIC, FV, … |
@@ -174,7 +174,7 @@ Ocho tablas (`schema.sql`):
 
 ---
 
-## 7. El catálogo de 381 tags
+## 7. El catálogo de 395 tags
 
 ### Por área
 
@@ -184,7 +184,7 @@ Ocho tablas (`schema.sql`):
 | 100 | Molienda | 24 |
 | 200 | Destilería | 117 |
 | 250 | Biodestilería | 13 |
-| 300 | Calderas / Generación de Vapor | 87 |
+| 300 | Calderas / Generación de Vapor | 101 |
 | 400 | Clarificación y Encalado | 18 |
 | 500 | Evaporación | 50 |
 | 600 | Cocimiento / Tachos | 15 |
@@ -192,6 +192,8 @@ Ocho tablas (`schema.sql`):
 | 800 | Secado y Envase | 0 |
 | 900 | Fuerza Motriz / Turbogeneradores | 9 |
 | 950 | Tratamiento de Agua / Ósmosis | 0 |
+
+> El 29/10/2026 se sumaron 14 RTD: `300_TT_038A/B` (rodamientos delantero y trasero del VTI de la caldera 9, lazo 38 con sufijos) y `300_TT_039`, `040`, `048`–`057` (hogar, economizador, vapor de alta y caja de aire de las calderas 8, 9 y 10, un lazo por instrumento). El área 300 pasa a 101 tags y el total a 395. Quedan 5 canales RTD sin tagear porque comparten canal físico entre dos calderas y hay que verificar en campo a cuál pertenecen.
 
 ### Por PLC (`plc_origen`, valores canónicos)
 
@@ -230,6 +232,8 @@ Otras IPs del inventario que no tienen tags todavía: `CENTRIFUGA_DE_PRIMERA` (.
 | 01/10 | **depuración "puro proceso"**: 99 bajas + 2 altas → **381** | `exports/plan_maestro_puro_proceso_290926.csv`, `src/generar_plan_puro_proceso_290926.py`, `src/aplicar_plan_puro_proceso_290926.py` |
 | 01/10 | `plc_origen`: 14 altas sin PLC y luego los 11 manuales | `backups/…pre_plc_origen*.db` |
 | 01/10 | unificación de strings de PLC (15 filas: `Calderas_8_9_10_Des` y `DESTILERIA_16062026`) | commit `5c2c78e` |
+| 29/10 | **alta de las 2 RTD de rodamientos del VTI** (caldera 9) → **383** | `backups/tags_ingenio_381tags_pre_rtd_vti_291026.db` |
+| 29/10 | **alta de 12 RTD de calderas 8, 9 y 10** (hogar, economizador, vapor, caja de aire) → **395** | `backups/tags_ingenio_383tags_pre_rtd_calderas_291026.db` |
 
 ### La depuración "puro proceso" (el paso que definió el catálogo actual)
 
@@ -267,7 +271,7 @@ Son la parte más delicada del proyecto. Resumen operativo:
 4. **INSERT que extiende un lazo existente** conserva el número del lazo (11 filas del plan v5). **INSERT que crea lazo nuevo** puede renumerarse.
 5. **Renumeración compacta:** al eliminar instrumentos quedan huecos; los lazos nuevos se reasignan a los números libres más bajos de cada área, sin tocar los lazos de producción. En la depuración del 01/10 se renumeraron **125 de 186 grupos**; el mapeo completo está en `exports/remap_numeracion_puro_proceso_290926.csv` y cada fila del plan guarda `Tag_PreFiltro`.
 6. **No se reciclan números retirados** (bajas por consolidación o renombre) mientras la base esté en construcción; la regla se vuelve estricta con la puesta en producción con operarios.
-7. **Huecos que quedan:** los de cada área vienen de números que la base **nunca usó** (ej. área 100 usa 1–7 y 29, 31–34). Cerrarlos exigiría renumerar los 381 tags de producción: no se hace.
+7. **Huecos que quedan:** los de cada área vienen de números que la base **nunca usó** (ej. área 100 usa 1–7 y 29, 31–34). Cerrarlos exigiría renumerar los 395 tags de producción: no se hace.
 
 ---
 
@@ -456,7 +460,7 @@ $PY tests/test_loop_ui_integration.py    # integración de lazo en la UI
 | `.exe` sin base | Con el hook avisa y sale; **sin** el hook crearía una base vacía (el `_resolver_db_path` copia la base empaquetada sólo si existe; si no, devuelve la ruta y `init_db()` crea tablas vacías). |
 | `--noconsole` oculta errores | Un fallo al arrancar muestra un diálogo "Unhandled exception in script": hay que leerlo con `EnumWindows`/`GetWindowText` o compilar con consola para depurar. |
 | PyInstaller onefile | Lanza **dos procesos** (padre e hijo): al matar, enumerar descendientes o queda huérfano. |
-| Tests con conteos fijos | Varias pruebas fijan `478` tags por igualdad estricta: si se corren contra el catálogo actual (381) fallan por diseño, no por regresión. |
+| Tests con conteos fijos | Varias pruebas fijan `478` tags por igualdad estricta: si se corren contra el catálogo actual (395) fallan por diseño, no por regresión. |
 | CRLF | Los archivos del repo están en CRLF; `patch`/`write_file` avisan "LF will be replaced by CRLF". No es un problema, pero evita diffs masivos si se normaliza. |
 | Caracteres especiales en rutas | El proyecto tiene carpetas con espacios y `ñ`; en bash hay que citar (`"p pasar/"`). |
 | `rg` no instalado | Usar `grep -rn` o Python para buscar en el código y en los L5X. |
@@ -506,6 +510,8 @@ $PY tests/test_loop_ui_integration.py    # integración de lazo en la UI
 | `tags_ingenio_381tags_pre_plc_origen_011026.db` | 381 con 25 PLC vacíos | 381 | 4.015 | `28c9b8922cb8…` |
 | `tags_ingenio_381tags_pre_plc_origen_manuales_011026.db` | antes de completar los 11 manuales | 381 | 4.029 | `85f5ffb5a6be…` |
 | `tags_ingenio_381tags_pre_homologacion_plc_011026.db` | antes de unificar strings de PLC | 381 | 4.040 | `266d6ea94273…` |
+| `tags_ingenio_381tags_pre_rtd_vti_291026.db` | antes de las 2 RTD del VTI | 381 | 4.055 | `864840c4a9b4…` |
+| `tags_ingenio_383tags_pre_rtd_calderas_291026.db` | antes de los 12 RTD de calderas | 383 | 4.057 | `dbb99da6e69b…` |
 
 ### Planes y mapeos (`exports/`)
 
