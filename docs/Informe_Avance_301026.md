@@ -4,7 +4,7 @@
 |---|---|
 | Período | Desde el informe del 29/10/2026 |
 | Ejes del período | El monitor como ejecutable, logo propio, arranque automático, identidad de la aplicación |
-| Estado | Corriendo y registrando: 905 barridos. 16.290 filas |
+| Estado | Dos controladores en línea, corriendo y registrando: 905 barridos. 16.290 filas |
 
 ## 1. Resumen del período
 
@@ -94,21 +94,62 @@ El programa se inicia con la sesión desde la carpeta de Inicio de Windows, con 
 
 Para desactivarlo alcanza con borrar el acceso directo de `Inicio` del menú de programas.
 
-## 8. Estado del monitoreo
+## 8. Ampliación a la caldera 11 y depuración de señales
+
+El monitor pasó de leer un solo controlador a leer dos: el de calderas 8, 9 y 10 (192.168.10.195) y el de la caldera 11 (192.168.10.251). Cada uno tiene su propia conexión, así que la caída de uno no interrumpe el registro del otro.
+
+En la caldera 11 los ventiladores no se llaman VTI ni VTF: los identifiqué por los comentarios del propio programa.
+
+| Tag del PLC | Qué es | Lectura |
+|---|---|---|
+| `ME105_1_RPM` | Exaustor 1 IDF (tiro inducido) | 416,0 rpm |
+| `ME105_2_RPM` | Exaustor 2 IDF | 498,0 rpm |
+| `ME101_9D_RPM` | Ventilador primario FDF derecho | 498,0 rpm |
+| `ME101_9E_RPM` | Ventilador primario FDF izquierdo | 579,9 rpm |
+| `ME101_10_RPM` | Ventilador secundario FDT | 498,0 rpm |
+| `IT_PORCEN_CAL11_VTI_NORTE` | Corriente VTI Norte | 94,0 % |
+| `IT_PORCEN_CAL11_VTI_SUR` | Corriente VTI Sur | 94,9 % |
+
+**Defecto encontrado en el programa de la caldera 11.** Los cinco RPM se leían en negativo. La causa no es la medición: el ladder arma la velocidad con un INT de 16 bits y lo divide por 100, y cuando el valor supera 327,67 rpm el INT se interpreta con signo. La diferencia es exacta (65536 dividido 100), así que el monitor la corrige sumando 655,36 cuando el valor viene negativo. Sin esa corrección, el registro habría guardado números imposibles.
+
+**Corrientes.** Los cinco variadores tienen corriente declarada en el programa, pero el controlador no la expone en línea. Lo que sí publica son los dos porcentajes de los VTI, que es lo que se registra.
+
+### Señales archivadas
+
+Quince señales dejaron de leerse y de guardarse, y quedan listadas para reactivarlas cuando se cableen:
+
+| Grupo | Señales | Motivo |
+|---|---|---|
+| Caldera 8 | 6 | Sin señal útil: equipo fuera de servicio |
+| Caldera 10 | 6 | Fuera de servicio; los VTI además saturados en 800 rpm |
+| VTF caldera 9 | 1 | Bloque de escalado sin entrada cableada |
+| RTD anteriores de la 9 | 2 | Canal abierto: leen 870 °C, sin sensor |
+
+Se reactivan desde la ventana: vista "Archivadas", se elige la fila y se aprieta "Archivar / Reactivar". El estado queda guardado en `datos/senales_estado.json` y el barrido se reinicia solo para tomar el cambio.
+
+### La RTD del rodamiento
+
+La temperatura del rodamiento del VTI de la caldera 9 viene del canal `BP_ANALOGICA:7:I.Ch[1].Data` y lee **28,35 °C**. Se revisaron los doce canales de ese módulo: el 1 es el único que mide; el resto está abierto (entrega 870 °C), que es la razón por la que las dos RTD anteriores daban cero.
+
+## 9. Estado del monitoreo
 
 | Indicador | Valor |
 |---|---|
-| Señales leídas por barrido | 18 (8 de RPM, 8 de corriente, 2 RTD) |
+| Controladores monitoreados | 2 (calderas 8-9-10 en .195 y caldera 11 en .251) |
+| Señales leídas por barrido | 11 (6 de RPM, 4 de corriente, 1 RTD) |
+| Señales archivadas | 15, reactivables desde la ventana |
 | Intervalo | 30 segundos |
-| Barridos registrados | 905 |
-| Filas en la base | 16.290 |
+| Barridos registrados | 974 |
+| Filas en la base | 17.280 |
 | Desde | 29/10/2026 10:02:26 |
-| Hasta | 30/10/2026 11:43:58 |
-| Pruebas del módulo | 9 de 9 en verde |
+| Hasta | 30/10/2026 12:19:59 |
+| Pruebas del módulo | 15 de 15 en verde |
 
-Las tres señales cuyo bloque de escalado no tiene entrada cableada siguen marcadas como `SIN_CABLEAR`, y las dos RTD de rodamientos siguen entregando 0,00 °C. Son las mismas anomalías documentadas en el informe anterior: el problema es de campo, no del programa.
+Las señales sin medición ya no se guardan: quedaron archivadas en lugar de registrar un cero engañoso. Lo que sigue pendiente es de campo, no del programa.
 
-## 9. Pendientes
+Dos observaciones que quedan abiertas: la corriente del VTF de la caldera 9 registra 0,0 A constante (puede ser que el ventilador esté detenido o que la señal esté muerta), y tres de los cinco RPM de la caldera 11 dan exactamente 498,02, lo que conviene vigilar para descartar que dos canales lean el mismo dato.
+
+## 10. Pendientes
 
 | # | Pendiente |
 |---|---|
@@ -117,3 +158,11 @@ Las tres señales cuyo bloque de escalado no tiene entrada cableada siguen marca
 | 3 | Revisar los sensores RTD saturados o en cero |
 | 4 | Decidir si se tagean las RPM y corrientes del VTI, hoy fuera del alcance de proceso |
 | 5 | Si se quiere el arranque por el Programador de tareas en lugar de la carpeta de Inicio, hace falta una sesión con permisos de administrador |
+| 6 | Confirmar si el canal 7:1 es el rodamiento delantero o el trasero del VTI, para nombrar el tag |
+| 7 | Definir si el VTF de la caldera 9 está detenido (0,0 A real) o si hay que archivarlo |
+
+## 11. En síntesis
+
+El monitor cubre ahora los dos controladores de la casa de calderas, con once señales útiles y quince archivadas que esperan su cableado. Los ventiladores de la caldera 11 se registran con su velocidad real, corregido el defecto de signo que traía el propio programa, y la temperatura del rodamiento del VTI de la caldera 9 volvió a tener una lectura válida después de descartar los canales abiertos.
+
+El registro queda limpio de ceros engañosos: lo que no mide no se guarda, y se reactiva cuando esté resuelto en campo.

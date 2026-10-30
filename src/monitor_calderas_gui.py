@@ -64,8 +64,8 @@ def registrar_identidad():
 
 class App(tb.Window):
     def __init__(self):
-        super().__init__(title="Monitor VTI / VTF — Calderas", themename="darkly", size=(1120, 650))
-        self.minsize(960, 560)
+        super().__init__(title="Monitor VTI / VTF — Calderas", themename="darkly", size=(1270, 700))
+        self.minsize(1100, 600)
         try:
             self.iconbitmap(str(ICO))
         except Exception:
@@ -102,47 +102,64 @@ class App(tb.Window):
         textos.pack(side="left")
         tk.Label(textos, text="Monitor VTI / VTF", bg="white", fg=AZUL,
                  font=("Segoe UI", 17, "bold")).pack(anchor="w")
-        tk.Label(textos, text="Calderas 8, 9 y 10 — RPM, corriente y RTD de rodamientos",
+        tk.Label(textos, text="Calderas 8, 9 y 10 + caldera 11 — RPM, corriente y RTD",
                  bg="white", fg="#555555", font=("Segoe UI", 9)).pack(anchor="w")
         tk.Frame(cab, bg=AMBAR, height=3).pack(fill="x", side="bottom")
 
-        controles = ttk.Frame(self, padding=(14, 12, 14, 6))
+        controles = ttk.Frame(self, padding=(14, 10, 14, 4))
         controles.pack(fill="x")
-        ttk.Label(controles, text="PLC (IP)").grid(row=0, column=0, sticky="w")
-        self.var_ip = tk.StringVar(value=mc.IP_POR_DEFECTO)
-        ttk.Entry(controles, textvariable=self.var_ip, width=16).grid(row=0, column=1, padx=(6, 16))
-        ttk.Label(controles, text="Intervalo (s)").grid(row=0, column=2, sticky="w")
+        ttk.Label(controles, text="PLC calderas 8-9-10").grid(row=0, column=0, sticky="w")
+        self.var_ip = tk.StringVar(value=mc.PLCS["calderas"])
+        ttk.Entry(controles, textvariable=self.var_ip, width=15).grid(row=0, column=1, padx=(6, 14))
+        ttk.Label(controles, text="PLC caldera 11").grid(row=0, column=2, sticky="w")
+        self.var_ip11 = tk.StringVar(value=mc.PLCS["cald11"])
+        ttk.Entry(controles, textvariable=self.var_ip11, width=15).grid(row=0, column=3, padx=(6, 14))
+        ttk.Label(controles, text="Intervalo (s)").grid(row=0, column=4, sticky="w")
         self.var_intervalo = tk.StringVar(value=str(int(mc.INTERVALO_POR_DEFECTO)))
-        ttk.Spinbox(controles, from_=2, to=3600, textvariable=self.var_intervalo, width=6).grid(
-            row=0, column=3, padx=(6, 16))
+        ttk.Spinbox(controles, from_=2, to=3600, textvariable=self.var_intervalo, width=5).grid(
+            row=0, column=5, padx=(6, 14))
         self.var_simulado = tk.BooleanVar(value=False)
-        ttk.Checkbutton(controles, text="Simulado (sin PLC)", variable=self.var_simulado).grid(
-            row=0, column=4, padx=(0, 16))
+        ttk.Checkbutton(controles, text="Simulado", variable=self.var_simulado).grid(
+            row=0, column=6, padx=(0, 14))
         self.btn_iniciar = ttk.Button(controles, text="▶  Iniciar", style="Accion.TButton",
                                       command=self.iniciar)
-        self.btn_iniciar.grid(row=0, column=5, padx=(0, 8))
+        self.btn_iniciar.grid(row=0, column=7, padx=(0, 8))
         self.btn_detener = ttk.Button(controles, text="■  Detener", command=self.detener,
                                       state="disabled")
-        self.btn_detener.grid(row=0, column=6, padx=(0, 20))
+        self.btn_detener.grid(row=0, column=8, padx=(0, 18))
         ttk.Button(controles, text="Exportar CSV", command=lambda: self.exportar("csv")).grid(
-            row=0, column=7, padx=(0, 6))
+            row=0, column=9, padx=(0, 6))
         ttk.Button(controles, text="Exportar XLSX", command=lambda: self.exportar("xlsx")).grid(
-            row=0, column=8, padx=(0, 6))
-        ttk.Button(controles, text="Abrir carpeta", command=self.abrir_carpeta).grid(row=0, column=9)
+            row=0, column=10, padx=(0, 6))
+        ttk.Button(controles, text="Abrir carpeta", command=self.abrir_carpeta).grid(row=0, column=11)
+
+        vista = ttk.Frame(self, padding=(14, 4, 14, 2))
+        vista.pack(fill="x")
+        ttk.Label(vista, text="Ver").pack(side="left")
+        self.var_vista = tk.StringVar(value="Activas")
+        combo = ttk.Combobox(vista, textvariable=self.var_vista, width=12, state="readonly",
+                             values=("Activas", "Archivadas", "Todas"))
+        combo.pack(side="left", padx=(6, 14))
+        combo.bind("<<ComboboxSelected>>", lambda _e: self._poblar_tabla())
+        self.btn_archivo = ttk.Button(vista, text="Archivar / Reactivar", command=self._alternar_archivo)
+        self.btn_archivo.pack(side="left", padx=(0, 14))
+        self.lbl_motivo = ttk.Label(vista, text="", style="secondary.TLabel")
+        self.lbl_motivo.pack(side="left")
 
         marco = ttk.Frame(self, padding=(14, 6))
         marco.pack(fill="both", expand=True)
-        cols = ("grupo", "senal", "descripcion", "valor", "unidad", "calidad", "hora")
+        cols = ("plc", "grupo", "senal", "descripcion", "valor", "unidad", "calidad", "hora")
         self.tabla = ttk.Treeview(marco, columns=cols, show="headings", height=18)
-        for c, t, w, a in (("grupo", "Grupo", 100, "w"), ("senal", "Señal", 190, "w"),
-                           ("descripcion", "Descripción", 360, "w"), ("valor", "Valor", 110, "e"),
-                           ("unidad", "Unidad", 70, "center"), ("calidad", "Calidad", 120, "center"),
-                           ("hora", "Última lectura", 160, "center")):
+        for c, t, w, a in (("plc", "PLC", 120, "w"), ("grupo", "Grupo", 90, "w"),
+                           ("senal", "Señal", 180, "w"), ("descripcion", "Descripción", 330, "w"),
+                           ("valor", "Valor", 100, "e"), ("unidad", "Unidad", 60, "center"),
+                           ("calidad", "Calidad", 110, "center"), ("hora", "Última lectura", 130, "center")):
             self.tabla.heading(c, text=t)
             self.tabla.column(c, width=w, anchor=a)
         self.tabla.tag_configure("error", foreground="#FF7B72")
         self.tabla.tag_configure("rtd", foreground="#79C0FF")
-        self.tabla.tag_configure("sin_cablear", foreground="#FFA657")
+        self.tabla.tag_configure("archivada", foreground="#8B8B8B")
+        self.tabla.bind("<<TreeviewSelect>>", lambda _e: self._mostrar_motivo())
         self.tabla.pack(fill="both", expand=True)
 
         pie = ttk.Frame(self, padding=(14, 4, 14, 10))
@@ -154,11 +171,52 @@ class App(tb.Window):
 
     def _poblar_tabla(self):
         self.tabla.delete(*self.tabla.get_children())
-        for s in mc.SENALES:
-            etiquetas = ("rtd",) if s.grupo == "RTD" else ()
-            self.tabla.insert("", "end", iid=s.clave,
-                              values=(s.grupo, s.clave, s.descripcion, "—", s.unidad, "sin datos", ""),
-                              tags=etiquetas)
+        vista = self.var_vista.get()
+        for s in mc.senales_con_estado():
+            if vista == "Activas" and s.archivada:
+                continue
+            if vista == "Archivadas" and not s.archivada:
+                continue
+            if s.archivada:
+                valores = (s.nombre_plc, s.grupo, s.clave, s.descripcion, "—", s.unidad,
+                           "ARCHIVADA", "no se lee")
+                etiquetas = ("archivada",)
+            else:
+                valores = (s.nombre_plc, s.grupo, s.clave, s.descripcion, "—", s.unidad,
+                           "sin datos", "")
+                etiquetas = ("rtd",) if s.grupo == "RTD" else ()
+            self.tabla.insert("", "end", iid=s.clave, values=valores, tags=etiquetas)
+
+    def _senal_seleccionada(self):
+        sel = self.tabla.selection()
+        if not sel:
+            return None
+        return next((s for s in mc.senales_con_estado() if s.clave == sel[0]), None)
+
+    def _mostrar_motivo(self):
+        senal = self._senal_seleccionada()
+        if senal is None:
+            self.lbl_motivo.config(text="")
+            return
+        if senal.archivada:
+            self.lbl_motivo.config(text=f"Archivada — {senal.motivo or 'sin lectura por ahora'}")
+        else:
+            self.lbl_motivo.config(text=f"Activa — {senal.nombre_plc}: {senal.tag}")
+
+    def _alternar_archivo(self):
+        senal = self._senal_seleccionada()
+        if senal is None:
+            messagebox.showinfo("Elegí una señal", "Seleccioná una fila de la tabla primero.")
+            return
+        nuevo_estado = not senal.archivada
+        mc.fijar_archivada(senal.clave, nuevo_estado)
+        accion = "archivada (deja de leerse y de guardarse)" if nuevo_estado else "reactivada"
+        self.lbl_estado.config(text=f"{senal.clave} {accion}. Se aplica desde el próximo barrido.")
+        self._poblar_tabla()
+        self._mostrar_motivo()
+        if self.hilo and self.hilo.is_alive():      # reinicia el barrido con la lista nueva
+            self.detener()
+            self.after(1200, self.iniciar)
 
     # ------------------------------------------------------------------
     def iniciar(self):
@@ -169,14 +227,16 @@ class App(tb.Window):
         except ValueError:
             messagebox.showerror("Intervalo inválido", "El intervalo debe ser un número de segundos.")
             return
-        ip = self.var_ip.get().strip() or mc.IP_POR_DEFECTO
-        fuente = mc.FuenteSimulada() if self.var_simulado.get() else mc.FuentePLC(ip)
+        ip = self.var_ip.get().strip() or mc.PLCS["calderas"]
+        ip11 = self.var_ip11.get().strip() or mc.PLCS["cald11"]
+        fuente = (mc.FuenteSimulada() if self.var_simulado.get()
+                  else mc.FuenteMultiple({"calderas": ip, "cald11": ip11}))
         self.parar = threading.Event()
         self.barridos = 0
         self.btn_iniciar.config(state="disabled")
         self.btn_detener.config(state="normal")
-        self.lbl_estado.config(text=f"Conectando con {ip}…" if not self.var_simulado.get()
-                                    else "Iniciando en modo simulado…")
+        self.lbl_estado.config(text=(f"Conectando con {ip} y {ip11}…"
+                                     if not self.var_simulado.get() else "Iniciando en modo simulado…"))
 
         def trabajo():
             def aviso(n, lecturas):
@@ -231,8 +291,10 @@ class App(tb.Window):
             else:
                 etiquetas = ("rtd",) if l["grupo"] == "RTD" else ()
             if self.tabla.exists(l["clave"]):
-                self.tabla.item(l["clave"], values=(l["grupo"], l["clave"], l["descripcion"],
-                                                    valor, l["unidad"], calidad,
+                senal = next((s for s in mc.SENALES if s.clave == l["clave"]), None)
+                nombre_plc = senal.nombre_plc if senal else l.get("plc", "")
+                self.tabla.item(l["clave"], values=(nombre_plc, l["grupo"], l["clave"],
+                                                    l["descripcion"], valor, l["unidad"], calidad,
                                                     dt.datetime.now().strftime("%H:%M:%S")),
                                 tags=etiquetas)
         self._actualizar_resumen()

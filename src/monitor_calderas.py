@@ -17,13 +17,14 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import json
 import math
 import random
 import sqlite3
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -40,50 +41,129 @@ DATOS_DIR = _raiz_datos() / "datos"
 DB_PATH = DATOS_DIR / "monitor_calderas.db"
 EXPORT_DIR = DATOS_DIR / "exportaciones"
 
-IP_POR_DEFECTO = "192.168.10.195"   # Calderas_8_9_10_Desaireador (1756-L72)
+PLCS: dict[str, str] = {
+    "calderas": "192.168.10.195",   # Calderas_8_9_10_Desaireador (1756-L72)
+    "cald11": "192.168.10.251",     # CALD_LA_FLORIDA (1756-L72)
+}
+NOMBRE_PLC = {"calderas": "Calderas 8-9-10", "cald11": "Caldera 11"}
+IP_POR_DEFECTO = PLCS["calderas"]
 INTERVALO_POR_DEFECTO = 30.0
+
+# El programa de la caldera 11 arma la velocidad con un INT de 16 bits y lo divide
+# por 100: cuando el valor supera 327,67 rpm el INT se interpreta con signo y el tag
+# queda en negativo. La diferencia exacta es 65536 / 100.
+DESFASE_INT16 = 655.36
+
+ESTADO_PATH = DATOS_DIR / "senales_estado.json"
 
 
 @dataclass(frozen=True)
 class Senal:
-    """Una señal a monitorear y cómo mostrarla."""
+    """Una señal a monitorear, de qué PLC sale y si está activa o archivada."""
 
     clave: str          # nombre corto para la tabla y el export
-    tag: str            # tag real en el PLC (con ámbito de programa)
+    tag: str            # tag real en el PLC (con ámbito cuando hace falta)
     descripcion: str
     grupo: str          # RPM | CORRIENTE | RTD
     unidad: str
-    sin_cablear: bool = False   # bloque de escalado sin entrada en el FBD
+    plc: str = "calderas"
+    archivada: bool = False     # archivada: no se lee y no se guarda
+    motivo: str = ""            # por qué está archivada / qué falta para activarla
+    corregir_signo: bool = False  # el PLC la publica como INT con signo
+
+    @property
+    def nombre_plc(self) -> str:
+        return NOMBRE_PLC.get(self.plc, self.plc)
 
 
 SENALES: tuple[Senal, ...] = (
-    # --- velocidad de los ventiladores (RPM) ---
-    Senal("C8_ST_VTF", "Program:C8.C8_ST_VTF", "Velocidad VTF caldera 8", "RPM", "rpm"),
-    Senal("C8_ST_VTI_NORTE", "Program:C8.C8_ST_VTI_NORTE", "Velocidad VTI Norte caldera 8", "RPM", "rpm"),
-    Senal("C8_ST_VTI_SUR", "Program:C8.C8_ST_VTI_SUR", "Velocidad VTI Sur caldera 8", "RPM", "rpm"),
+    # ---------------- Calderas 8 / 9 / 10 — 192.168.10.195 ----------------
     Senal("C9_ST_VTI", "Program:C9.C9_ST_VTI", "Velocidad VTI caldera 9", "RPM", "rpm"),
-    Senal("C9_ST_VTF", "Program:C9.C9_ST_VTF", "Velocidad VTF caldera 9", "RPM", "rpm",
-          sin_cablear=True),
-    Senal("C10_ST_VTF", "Program:C10.C10_ST_VTF", "Velocidad VTF caldera 10", "RPM", "rpm"),
-    Senal("C10_ST_VTI_ESTE", "Program:C10.C10_ST_VTI_ESTE", "Velocidad VTI Este caldera 10", "RPM", "rpm"),
-    Senal("C10_ST_VTI_OESTE", "Program:C10.C10_ST_VTI_OESTE", "Velocidad VTI Oeste caldera 10", "RPM", "rpm"),
-    # --- corriente de los motores (A) ---
-    Senal("C8_IT_VTI_NORTE", "Program:C8.C8_IT_VTI_NORTE", "Corriente VTI Norte caldera 8", "CORRIENTE", "A"),
-    Senal("C8_IT_VTI_SUR", "Program:C8.C8_IT_VTI_SUR", "Corriente VTI Sur caldera 8", "CORRIENTE", "A",
-          sin_cablear=True),
-    Senal("C8_IT_VTF", "Program:C8.C8_IT_VTF", "Corriente VTF caldera 8", "CORRIENTE", "A",
-          sin_cablear=True),
     Senal("C9_IT_VTI", "Program:C9.C9_IT_VTI", "Corriente VTI caldera 9", "CORRIENTE", "A"),
     Senal("C9_IT_VTF", "Program:C9.C9_IT_VTF", "Corriente VTF caldera 9", "CORRIENTE", "A"),
-    Senal("C10_IT_VTI_ESTE", "Program:C10.C10_IT_VTI_ESTE", "Corriente VTI Este caldera 10", "CORRIENTE", "A"),
-    Senal("C10_IT_VTI_OESTE", "Program:C10.C10_IT_VTI_OESTE", "Corriente VTI Oeste caldera 10", "CORRIENTE", "A"),
-    Senal("C10_IT_VTF", "Program:C10.C10_IT_VTF", "Corriente VTF caldera 10", "CORRIENTE", "A"),
-    # --- RTD de rodamientos del VTI (solo delantero y trasero) ---
-    Senal("C9_TT_ROD_DEL_VTI", "Program:C9.C9_TT_ROD_DEL_VTI", "Rodamiento delantero VTI caldera 9", "RTD", "°C"),
-    Senal("C9_TT_ROD_TRA_VTI", "Program:C9.C9_TT_ROD_TRA_VTI", "Rodamiento trasero VTI caldera 9", "RTD", "°C"),
+    Senal("C9_TT_ROD_VTI", "BP_ANALOGICA:7:I.Ch[1].Data",
+          "Temperatura rodamiento VTI caldera 9", "RTD", "°C"),
+    Senal("C9_ST_VTF", "Program:C9.C9_ST_VTF", "Velocidad VTF caldera 9", "RPM", "rpm",
+          archivada=True, motivo="Bloque de escalado sin entrada cableada"),
+    Senal("C9_TT_ROD_DEL_VTI", "Program:C9.C9_TT_ROD_DEL_VTI",
+          "Rodamiento delantero VTI caldera 9 (canal 7:8)", "RTD", "°C",
+          archivada=True, motivo="Canal RTD abierto: lee 870 °C, sin sensor"),
+    Senal("C9_TT_ROD_TRA_VTI", "Program:C9.C9_TT_ROD_TRA_VTI",
+          "Rodamiento trasero VTI caldera 9 (canal 7:9)", "RTD", "°C",
+          archivada=True, motivo="Canal RTD abierto: lee 870 °C, sin sensor"),
+
+    # ---------------- Caldera 11 — 192.168.10.251 ----------------
+    Senal("CAL11_IDF1_RPM", "ME105_1_RPM", "Exaustor 1 IDF (tiro inducido) caldera 11",
+          "RPM", "rpm", plc="cald11", corregir_signo=True),
+    Senal("CAL11_IDF2_RPM", "ME105_2_RPM", "Exaustor 2 IDF (tiro inducido) caldera 11",
+          "RPM", "rpm", plc="cald11", corregir_signo=True),
+    Senal("CAL11_FDF_DER_RPM", "ME101_9D_RPM", "Ventilador primario FDF derecho caldera 11",
+          "RPM", "rpm", plc="cald11", corregir_signo=True),
+    Senal("CAL11_FDF_IZQ_RPM", "ME101_9E_RPM", "Ventilador primario FDF izquierdo caldera 11",
+          "RPM", "rpm", plc="cald11", corregir_signo=True),
+    Senal("CAL11_FDT_RPM", "ME101_10_RPM", "Ventilador secundario FDT caldera 11",
+          "RPM", "rpm", plc="cald11", corregir_signo=True),
+    Senal("CAL11_VTI_NORTE_PCT", "IT_PORCEN_CAL11_VTI_NORTE", "Corriente VTI Norte caldera 11",
+          "CORRIENTE", "%", plc="cald11"),
+    Senal("CAL11_VTI_SUR_PCT", "IT_PORCEN_CAL11_VTI_SUR", "Corriente VTI Sur caldera 11",
+          "CORRIENTE", "%", plc="cald11"),
+
+    # ---------------- Archivadas: caldera 8 ----------------
+    Senal("C8_ST_VTF", "Program:C8.C8_ST_VTF", "Velocidad VTF caldera 8", "RPM", "rpm",
+          archivada=True, motivo="Caldera 8 sin señal útil: equipo fuera de servicio"),
+    Senal("C8_ST_VTI_NORTE", "Program:C8.C8_ST_VTI_NORTE", "Velocidad VTI Norte caldera 8",
+          "RPM", "rpm", archivada=True, motivo="Caldera 8 sin señal útil: equipo fuera de servicio"),
+    Senal("C8_ST_VTI_SUR", "Program:C8.C8_ST_VTI_SUR", "Velocidad VTI Sur caldera 8",
+          "RPM", "rpm", archivada=True, motivo="Caldera 8 sin señal útil: equipo fuera de servicio"),
+    Senal("C8_IT_VTI_NORTE", "Program:C8.C8_IT_VTI_NORTE", "Corriente VTI Norte caldera 8",
+          "CORRIENTE", "A", archivada=True, motivo="Caldera 8 sin señal útil: equipo fuera de servicio"),
+    Senal("C8_IT_VTI_SUR", "Program:C8.C8_IT_VTI_SUR", "Corriente VTI Sur caldera 8",
+          "CORRIENTE", "A", archivada=True, motivo="Canal sin cablear y caldera fuera de servicio"),
+    Senal("C8_IT_VTF", "Program:C8.C8_IT_VTF", "Corriente VTF caldera 8",
+          "CORRIENTE", "A", archivada=True, motivo="Canal sin cablear y caldera fuera de servicio"),
+
+    # ---------------- Archivadas: caldera 10 ----------------
+    Senal("C10_ST_VTF", "Program:C10.C10_ST_VTF", "Velocidad VTF caldera 10", "RPM", "rpm",
+          archivada=True, motivo="Caldera 10 sin señal útil: equipo fuera de servicio"),
+    Senal("C10_ST_VTI_ESTE", "Program:C10.C10_ST_VTI_ESTE", "Velocidad VTI Este caldera 10",
+          "RPM", "rpm", archivada=True, motivo="Caldera 10 sin señal útil: VTI saturado en 800 rpm"),
+    Senal("C10_ST_VTI_OESTE", "Program:C10.C10_ST_VTI_OESTE", "Velocidad VTI Oeste caldera 10",
+          "RPM", "rpm", archivada=True, motivo="Caldera 10 sin señal útil: VTI saturado en 800 rpm"),
+    Senal("C10_IT_VTI_ESTE", "Program:C10.C10_IT_VTI_ESTE", "Corriente VTI Este caldera 10",
+          "CORRIENTE", "A", archivada=True, motivo="Caldera 10 sin señal útil: equipo fuera de servicio"),
+    Senal("C10_IT_VTI_OESTE", "Program:C10.C10_IT_VTI_OESTE", "Corriente VTI Oeste caldera 10",
+          "CORRIENTE", "A", archivada=True, motivo="Caldera 10 sin señal útil: equipo fuera de servicio"),
+    Senal("C10_IT_VTF", "Program:C10.C10_IT_VTF", "Corriente VTF caldera 10",
+          "CORRIENTE", "A", archivada=True, motivo="Caldera 10 sin señal útil: equipo fuera de servicio"),
 )
 
-POR_TAG = {s.tag: s for s in SENALES}
+
+# ----------------------------------------------------------------------
+# Estado de las señales (activa / archivada), persistido en datos/
+# ----------------------------------------------------------------------
+def _leer_estado() -> dict[str, bool]:
+    try:
+        datos = json.loads(ESTADO_PATH.read_text(encoding="utf-8"))
+        return {str(k): bool(v) for k, v in datos.items()}
+    except Exception:
+        return {}
+
+
+def fijar_archivada(clave: str, archivada: bool) -> None:
+    """Guarda en disco si una señal queda archivada o se vuelve a leer."""
+    estado = _leer_estado()
+    estado[str(clave)] = bool(archivada)
+    ESTADO_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ESTADO_PATH.write_text(json.dumps(estado, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def senales_con_estado() -> list[Senal]:
+    estado = _leer_estado()
+    return [replace(s, archivada=estado.get(s.clave, s.archivada)) for s in SENALES]
+
+
+def senales_activas() -> list[Senal]:
+    return [s for s in senales_con_estado() if not s.archivada]
 
 
 # ----------------------------------------------------------------------
@@ -177,11 +257,15 @@ class Almacen:
 # Fuentes de datos
 # ----------------------------------------------------------------------
 class FuentePLC:
-    """Lee los tags del controlador por CIP. Solo lectura."""
+    """Lee las señales de UN controlador por CIP. Solo lectura."""
 
-    def __init__(self, ip, timeout=6.0):
-        self.ip = ip
+    def __init__(self, plc: str = "calderas", ip: str | None = None, timeout: float = 6.0,
+                 senales=None):
+        self.plc = plc
+        self.ip = ip or PLCS.get(plc, IP_POR_DEFECTO)
         self.timeout = timeout
+        self.senales = tuple(senales if senales is not None else
+                             [s for s in senales_activas() if s.plc == plc])
         self._plc = None
 
     def conectar(self):
@@ -199,28 +283,69 @@ class FuentePLC:
                 pass
             self._plc = None
 
+    def _valor(self, senal, crudo):
+        valor = float(crudo)
+        if senal.corregir_signo and valor < 0:
+            valor += DESFASE_INT16
+        return valor
+
     def leer(self):
         if self._plc is None:
             self.conectar()
-        res = self._plc.read(*[s.tag for s in SENALES])
+        if not self.senales:
+            return []
+        res = self._plc.read(*[s.tag for s in self.senales])
         if not isinstance(res, list):
             res = [res]
+        por_tag = {s.tag: s for s in self.senales}
         salida = []
         for r in res:
-            senal = POR_TAG.get(r.tag) or next((s for s in SENALES if s.clave == r.tag), None)
+            senal = por_tag.get(r.tag) or next((s for s in self.senales if s.clave == r.tag), None)
             if senal is None:
                 continue
             if r.error is None and isinstance(r.value, (int, float)) and not math.isnan(float(r.value)):
                 salida.append({"clave": senal.clave, "tag": senal.tag, "descripcion": senal.descripcion,
-                               "grupo": senal.grupo, "unidad": senal.unidad,
-                               "valor": float(r.value),
-                               "calidad": "SIN_CABLEAR" if senal.sin_cablear else "OK",
-                               "error": None})
+                               "grupo": senal.grupo, "unidad": senal.unidad, "plc": senal.plc,
+                               "valor": self._valor(senal, r.value), "calidad": "OK", "error": None})
             else:
                 salida.append({"clave": senal.clave, "tag": senal.tag, "descripcion": senal.descripcion,
-                               "grupo": senal.grupo, "unidad": senal.unidad,
+                               "grupo": senal.grupo, "unidad": senal.unidad, "plc": senal.plc,
                                "valor": None, "calidad": "ERROR", "error": str(r.error or "valor inválido")})
         return salida
+
+
+class FuenteMultiple:
+    """Una conexión por controlador; la caída de uno no afecta a los demás."""
+
+    def __init__(self, ips: dict[str, str] | None = None, timeout: float = 6.0):
+        self.ips = dict(PLCS)
+        self.ips.update({k: v for k, v in (ips or {}).items() if v})
+        self.senales = tuple(senales_activas())
+        usados = {s.plc for s in self.senales}
+        self.fuentes = {plc: FuentePLC(plc, self.ips.get(plc), timeout,
+                                       senales=[s for s in self.senales if s.plc == plc])
+                        for plc in sorted(usados)}
+
+    @property
+    def ip(self) -> str:
+        return " / ".join(f"{v}" for v in self.ips.values())
+
+    def leer(self):
+        salida = []
+        for plc, fuente in self.fuentes.items():
+            try:
+                salida.extend(fuente.leer())
+            except Exception as exc:
+                fuente.cerrar()
+                salida.extend([{"clave": s.clave, "tag": s.tag, "descripcion": s.descripcion,
+                                "grupo": s.grupo, "unidad": s.unidad, "plc": s.plc,
+                                "valor": None, "calidad": "SIN_COMUNICACION",
+                                "error": f"{type(exc).__name__}: {exc}"} for s in fuente.senales])
+        return salida
+
+    def cerrar(self):
+        for fuente in self.fuentes.values():
+            fuente.cerrar()
 
 
 class FuenteSimulada:
@@ -228,9 +353,22 @@ class FuenteSimulada:
 
     def __init__(self, semilla=7):
         self._rnd = random.Random(semilla)
-        self._base = {s.clave: (0.0 if s.grupo == "RTD" else self._rnd.uniform(300, 900))
-                      for s in SENALES}
+        self.senales = tuple(senales_activas())
+        self._base = {}
+        for s in self.senales:
+            if s.grupo == "RTD":
+                self._base[s.clave] = 45.0
+            elif s.unidad == "%":
+                self._base[s.clave] = self._rnd.uniform(60, 95)
+            elif s.grupo == "CORRIENTE":
+                self._base[s.clave] = self._rnd.uniform(200, 600)
+            else:
+                self._base[s.clave] = self._rnd.uniform(300, 900)
         self.conectada = False
+
+    @property
+    def ip(self) -> str:
+        return "simulado"
 
     def conectar(self):
         self.conectada = True
@@ -240,15 +378,12 @@ class FuenteSimulada:
 
     def leer(self):
         salida = []
-        for s in SENALES:
+        for s in self.senales:
             v = self._base[s.clave] + self._rnd.uniform(-3, 3)
-            if s.grupo == "RTD":
-                v = 55 + self._rnd.uniform(-4, 4)
             self._base[s.clave] = max(0.0, v)
             salida.append({"clave": s.clave, "tag": s.tag, "descripcion": s.descripcion,
-                           "grupo": s.grupo, "unidad": s.unidad,
-                           "valor": round(v, 2),
-                           "calidad": "SIN_CABLEAR" if s.sin_cablear else "OK", "error": None})
+                           "grupo": s.grupo, "unidad": s.unidad, "plc": s.plc,
+                           "valor": round(v, 2), "calidad": "OK", "error": None})
         return salida
 
 
@@ -275,9 +410,9 @@ def bucle_monitoreo(fuente, almacen, intervalo=INTERVALO_POR_DEFECTO, ciclos=Non
             except Exception as exc:                      # caída de comunicación
                 fuente.cerrar()
                 lecturas = [{"clave": s.clave, "tag": s.tag, "descripcion": s.descripcion,
-                             "grupo": s.grupo, "unidad": s.unidad, "valor": None,
+                             "grupo": s.grupo, "unidad": s.unidad, "plc": s.plc, "valor": None,
                              "calidad": "SIN_COMUNICACION", "error": f"{type(exc).__name__}: {exc}"}
-                            for s in SENALES]
+                            for s in getattr(fuente, "senales", ())]
             almacen.guardar_barrido(_ahora(), lecturas, corrida)
             n += 1
             if al_terminar_barrido:
@@ -358,7 +493,7 @@ def exportar_xlsx(almacen, destino=None, desde=None, hasta=None):
     # hoja de resumen por señal
     resumen = wb.create_sheet("Resumen")
     resumen.append(("Señal", "Descripción", "Unidad", "Lecturas", "Mínimo", "Máximo", "Promedio", "Última"))
-    for s in SENALES:
+    for s in senales_activas():
         vals = [f["valor"] for f in filas if f["clave"] == s.clave and f["valor"] is not None]
         ultima = next((f["ts"] for f in reversed(filas) if f["clave"] == s.clave and f["valor"] is not None), "")
         resumen.append((s.clave, s.descripcion, s.unidad, len(vals),
@@ -380,7 +515,8 @@ def exportar_xlsx(almacen, destino=None, desde=None, hasta=None):
 # ----------------------------------------------------------------------
 def main(argv=None):
     p = argparse.ArgumentParser(description="Monitor de VTI/VTF de Calderas (solo lectura)")
-    p.add_argument("--ip", default=IP_POR_DEFECTO)
+    p.add_argument("--ip", default=PLCS["calderas"], help="IP del PLC de calderas 8/9/10")
+    p.add_argument("--ip11", default=PLCS["cald11"], help="IP del PLC de la caldera 11")
     p.add_argument("--intervalo", type=float, default=INTERVALO_POR_DEFECTO)
     p.add_argument("--ciclos", type=int, default=None, help="cantidad de barridos y salir")
     p.add_argument("--db", default=None)
@@ -396,15 +532,17 @@ def main(argv=None):
         print(f"{n} filas exportadas\n  {csv_path}\n  {xlsx_path}")
         return 0
 
-    fuente = FuenteSimulada() if args.simulado else FuentePLC(args.ip)
+    fuente = FuenteSimulada() if args.simulado else \
+        FuenteMultiple({"calderas": args.ip, "cald11": args.ip11})
 
     def aviso(n, lecturas):
         ok = sum(1 for l in lecturas if l["calidad"] == "OK")
         muestra = "  ".join(f"{l['clave']}={l['valor']}" for l in lecturas[:3])
         print(f"[{_ahora()}] barrido {n}: {ok}/{len(lecturas)} OK  {muestra}", flush=True)
 
-    print(f"Monitoreando {'SIMULADO' if args.simulado else args.ip} cada {args.intervalo:g} s "
-          f"({len(SENALES)} señales). Ctrl+C para salir.")
+    destino = "SIMULADO" if args.simulado else f"{args.ip} + {args.ip11}"
+    print(f"Monitoreando {destino} cada {args.intervalo:g} s "
+          f"({len(fuente.senales)} señales activas de {len(SENALES)}). Ctrl+C para salir.")
     try:
         n = bucle_monitoreo(fuente, almacen, args.intervalo, args.ciclos, al_terminar_barrido=aviso)
     except KeyboardInterrupt:
